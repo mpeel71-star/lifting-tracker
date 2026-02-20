@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Lifting Tracker</title>
   <link rel="stylesheet" href="style.css" />
+  <!-- Charts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <div class="app">
@@ -21,14 +23,14 @@
         <button class="tab active" data-tab="log">Log</button>
         <button class="tab" data-tab="routines">Routines</button>
         <button class="tab" data-tab="history">History</button>
-        <button class="tab" data-tab="progress">Progress</button>
+        <button class="tab" data-tab="reports">Reports</button>
       </nav>
     </header>
 
     <!-- LOGIN -->
     <section id="loginView" class="card">
       <h2>Enter Password</h2>
-      <p class="muted">Simple lock for now (local only). Default: <b>lift</b></p>
+      <p class="muted">Simple lock (local only). Default: <b>lift</b></p>
       <div class="row">
         <input id="pwInput" type="password" placeholder="Password" />
         <button id="pwBtn" class="primary">Unlock</button>
@@ -43,11 +45,19 @@
         <div class="grid2">
           <div class="card">
             <h2>Start a Workout</h2>
-            <p class="muted">Select a day from your active routine and log all sets.</p>
+            <p class="muted">Pick a day from your active routine.</p>
 
             <div class="row">
               <label class="label">Day</label>
               <select id="daySelect"></select>
+            </div>
+
+            <div class="row">
+              <label class="label">Filter</label>
+              <label class="chip">
+                <input id="logCompoundOnly" type="checkbox" />
+                Compound only
+              </label>
             </div>
 
             <div class="row">
@@ -57,11 +67,11 @@
           </div>
 
           <div class="card">
-            <h2>Quick Tips</h2>
+            <h2>Auto-Insights</h2>
             <ul class="muted">
-              <li>Routines are versioned. Clone a routine to make a new one.</li>
-              <li>Workouts are saved with the routine name at the time.</li>
-              <li>Everything is stored in your browser (localStorage).</li>
+              <li>Exercise titles show your PR: max weight + best reps at that weight.</li>
+              <li>When you enter a set weight, you’ll see your best reps ever at that weight.</li>
+              <li>Compound tagging + filtering supported.</li>
             </ul>
           </div>
         </div>
@@ -96,7 +106,7 @@
             </div>
 
             <div class="row">
-              <label class="label">Select routine</label>
+              <label class="label">Routine</label>
               <select id="routineSelect"></select>
               <button id="setActiveBtn" class="primary small">Set Active</button>
             </div>
@@ -113,16 +123,28 @@
 
             <div class="row">
               <input id="newExerciseInput" placeholder="Add exercise (e.g., Bench Press)" />
+              <select id="newExerciseTag">
+                <option value="compound">Compound</option>
+                <option value="accessory">Accessory</option>
+              </select>
               <button id="addExerciseBtn" class="primary">Add</button>
             </div>
 
+            <div class="row">
+              <label class="label">View</label>
+              <label class="chip">
+                <input id="routineCompoundOnly" type="checkbox" />
+                Compound only
+              </label>
+            </div>
+
             <div id="exerciseList" class="list"></div>
-            <p class="muted tiny">Tip: Use “Replace” to swap exercises without losing old routines.</p>
+            <p class="muted tiny">Tip: Clone routine → swap exercises → old routine stays intact.</p>
           </div>
 
           <div class="card">
             <h2>Replace Exercise (Swap)</h2>
-            <p class="muted">This edits the selected routine only. Your old routines remain untouched.</p>
+            <p class="muted">Replaces inside the selected routine/day only.</p>
 
             <div class="row">
               <label class="label">From</label>
@@ -131,6 +153,13 @@
             <div class="row">
               <label class="label">To</label>
               <input id="replaceTo" placeholder="New exercise name (e.g., Incline DB Press)" />
+            </div>
+            <div class="row">
+              <label class="label">Tag</label>
+              <select id="replaceToTag">
+                <option value="compound">Compound</option>
+                <option value="accessory">Accessory</option>
+              </select>
             </div>
             <div class="row">
               <button id="replaceBtn" class="primary">Replace</button>
@@ -144,7 +173,7 @@
               <input id="newPw" type="password" placeholder="New password" />
               <button id="setPwBtn" class="ghost">Set Password</button>
             </div>
-            <p class="muted tiny">Security note: this is just a simple local lock.</p>
+            <p class="muted tiny">Security note: simple local lock only.</p>
           </div>
         </div>
       </section>
@@ -153,36 +182,63 @@
       <section class="panel hidden" data-panel="history">
         <div class="card">
           <h2>Workout History</h2>
-          <p class="muted">Your saved workouts. Each includes routine name + day.</p>
-          <div class="row">
-            <button id="exportBtn" class="ghost">Export JSON</button>
+          <p class="muted">Saved workouts (includes routine name + day).</p>
+          <div class="row wrap">
+            <button id="exportJsonBtn" class="ghost">Export JSON</button>
+            <button id="exportCsvBtn" class="ghost">Export CSV</button>
             <button id="clearAllBtn" class="danger">Clear ALL Data</button>
           </div>
           <div id="historyList" class="history"></div>
         </div>
       </section>
 
-      <!-- PROGRESS TAB -->
-      <section class="panel hidden" data-panel="progress">
-        <div class="card">
-          <h2>Progress</h2>
-          <p class="muted">Pick an exercise to see best set (estimated 1RM) over time.</p>
+      <!-- REPORTS TAB -->
+      <section class="panel hidden" data-panel="reports">
+        <div class="grid2">
+          <div class="card">
+            <h2>Exercise Reports</h2>
+            <p class="muted">Filter + select an exercise to see trends.</p>
 
-          <div class="row">
-            <label class="label">Exercise</label>
-            <select id="progressExercise"></select>
+            <div class="row">
+              <input id="reportSearch" placeholder="Search exercises (e.g., Bench)"/>
+            </div>
+
+            <div class="row">
+              <label class="chip">
+                <input id="reportCompoundOnly" type="checkbox" />
+                Compound only
+              </label>
+
+              <label class="label">Metric</label>
+              <select id="reportMetric">
+                <option value="e1rm">Estimated 1RM (best set)</option>
+                <option value="topWeight">Top weight (best set)</option>
+                <option value="volume">Total volume (sum weight×reps)</option>
+              </select>
+            </div>
+
+            <div class="row">
+              <label class="label">Exercise</label>
+              <select id="reportExercise"></select>
+            </div>
+
+            <div id="reportSummary" class="muted"></div>
+            <div class="divider"></div>
+            <div id="reportTable" class="list"></div>
           </div>
 
-          <div id="progressSummary" class="muted"></div>
-          <div id="progressTable" class="list"></div>
-          <p class="muted tiny">Next iteration we can add charts.</p>
+          <div class="card">
+            <h2>Trend Chart</h2>
+            <canvas id="reportChart" height="220"></canvas>
+            <p class="muted tiny">Tip: the chart uses your best set per workout for the selected exercise.</p>
+          </div>
         </div>
       </section>
     </main>
   </div>
 
   <footer class="footer muted tiny">
-    Stored locally in your browser. No cloud sync in v1.
+    Stored locally in your browser (localStorage). Exports let you migrate anytime.
   </footer>
 
   <script src="script.js"></script>
