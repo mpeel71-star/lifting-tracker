@@ -10,6 +10,19 @@
 </head>
 <body>
   <div class="app">
+    <section id="firebaseAuth" style="border:1px solid #ccc; padding:12px; margin:10px 0;">
+      <strong>Cloud Sync (Firebase)</strong>
+      <div style="margin-top:8px;">
+        <input id="fbEmail" type="email" placeholder="Email" />
+        <input id="fbPassword" type="password" placeholder="Password" />
+        <button id="fbSignUp">Create account</button>
+        <button id="fbSignIn">Sign in</button>
+        <button id="fbSignOut" style="display:none;">Sign out</button>
+        <button id="fbSyncNow" style="display:none;">Sync now</button>
+      </div>
+      <div id="fbMsg" style="margin-top:8px; color:#b00020;"></div>
+      <div id="fbStatus" style="margin-top:6px; color:#2e7d32;"></div>
+    </section>
     <header class="topbar">
       <div class="brand">
         <div class="logo">🏋️</div>
