@@ -1,11 +1,8 @@
-// ================= FIREBASE (CDN Modular SDK) =================
-
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
 import {
   getAuth,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
-  signOut,
   onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-auth.js";
 import {
@@ -15,7 +12,7 @@ import {
   setDoc
 } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js";
 
-// 🔥 YOUR REAL FIREBASE CONFIG
+// 🔥 Firebase Config
 const firebaseConfig = {
   apiKey: "AIzaSyDwLIqo-aqD-D3yzEGafZMF2VWEB0rkQao",
   authDomain: "lifting-tracker-5ff1b.firebaseapp.com",
@@ -26,76 +23,72 @@ const firebaseConfig = {
   measurementId: "G-8PMT4LHEXT"
 };
 
-// Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-
-// ================= BASIC CLOUD FUNCTIONS =================
-
-async function saveToCloud(uid, data) {
-  const ref = doc(db, "users", uid);
-  await setDoc(ref, { data, updated: Date.now() });
-}
-
-async function loadFromCloud(uid) {
-  const ref = doc(db, "users", uid);
-  const snap = await getDoc(ref);
-  return snap.exists() ? snap.data().data : null;
-}
-
-// ================= AUTH BUTTON LOGIC =================
 
 const emailInput = document.querySelector("input[placeholder='Email']");
 const passwordInput = document.querySelector("input[placeholder='Password']");
 const createBtn = document.querySelector("button:nth-of-type(1)");
 const signInBtn = document.querySelector("button:nth-of-type(2)");
+const useLocalBtn = document.querySelector(".advanced button");
+
+// ---------------- AUTH ----------------
 
 createBtn.addEventListener("click", async () => {
-  const email = emailInput.value.trim();
-  const password = passwordInput.value.trim();
-
-  if (!email || !password) {
-    alert("Email and password required.");
-    return;
-  }
-
   try {
-    await createUserWithEmailAndPassword(auth, email, password);
+    await createUserWithEmailAndPassword(auth, emailInput.value, passwordInput.value);
     alert("Account created successfully.");
   } catch (err) {
-    alert("Firebase Error: " + err.message);
+    alert(err.message);
   }
 });
 
 signInBtn.addEventListener("click", async () => {
-  const email = emailInput.value.trim();
-  const password = passwordInput.value.trim();
-
-  if (!email || !password) {
-    alert("Email and password required.");
-    return;
-  }
-
   try {
-    await signInWithEmailAndPassword(auth, email, password);
+    await signInWithEmailAndPassword(auth, emailInput.value, passwordInput.value);
     alert("Signed in successfully.");
   } catch (err) {
-    alert("Firebase Error: " + err.message);
+    alert(err.message);
   }
 });
 
-// Detect login state
-onAuthStateChanged(auth, async (user) => {
+// ---------------- CLOUD SYNC ----------------
+
+async function pushToCloud(user) {
+  const localData = localStorage.getItem("lifting_data");
+  if (!localData) {
+    alert("No local data to push.");
+    return;
+  }
+  await setDoc(doc(db, "users", user.uid), {
+    data: JSON.parse(localData),
+    updated: Date.now()
+  });
+  alert("Data pushed to cloud.");
+}
+
+async function pullFromCloud(user) {
+  const snap = await getDoc(doc(db, "users", user.uid));
+  if (!snap.exists()) {
+    alert("No cloud data found.");
+    return;
+  }
+  localStorage.setItem("lifting_data", JSON.stringify(snap.data().data));
+  alert("Cloud data loaded.");
+  location.reload();
+}
+
+// When login state changes
+onAuthStateChanged(auth, (user) => {
   if (user) {
     console.log("Logged in as:", user.email);
 
-    const cloudData = await loadFromCloud(user.uid);
-    if (cloudData) {
-      localStorage.setItem("lifting_data", JSON.stringify(cloudData));
-      console.log("Cloud data loaded.");
-    }
+    // Make advanced button become push button
+    useLocalBtn.textContent = "Push local → Cloud";
+    useLocalBtn.onclick = () => pushToCloud(user);
+
   } else {
-    console.log("User logged out.");
+    console.log("Logged out.");
   }
 });
