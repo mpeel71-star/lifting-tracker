@@ -1,196 +1,254 @@
-// ======================= Firebase (Auth + Firestore) =======================
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
-import {
-  getAuth,
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  onAuthStateChanged,
-  signOut
-} from "https://www.gstatic.com/firebasejs/12.9.0/firebase-auth.js";
-import {
-  getFirestore,
-  doc,
-  getDoc,
-  setDoc
-} from "https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js";
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Lifting Tracker</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
 
-// Your Firebase config (from your screenshot)
-const firebaseConfig = {
-  apiKey: "AIzaSyDwLIqo-aqD-D3yzEGafZMF2VWEB0rkQao",
-  authDomain: "lifting-tracker-5ff1b.firebaseapp.com",
-  projectId: "lifting-tracker-5ff1b",
-  storageBucket: "lifting-tracker-5ff1b.firebasestorage.app",
-  messagingSenderId: "880909478435",
-  appId: "1:880909478435:web:43cd4c5b24a136b4f5df96",
-  measurementId: "G-8PMT4LHEXT"
-};
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">🏋️</div>
+        <div>
+          <div class="title">Lifting Tracker</div>
+          <div class="subtitle" id="activeRoutineLabel"></div>
+          <div class="subtitle" id="cloudLabel">Local mode</div>
+        </div>
+      </div>
 
-const fbApp = initializeApp(firebaseConfig);
-const auth = getAuth(fbApp);
-const db = getFirestore(fbApp);
+      <div class="top-actions">
+        <button class="btn ghost" id="btnExport">Export JSON</button>
+        <label class="btn ghost file">
+          Import JSON
+          <input id="fileImport" type="file" accept="application/json" />
+        </label>
+      </div>
+    </header>
 
-// DOM
-const elEmail = document.getElementById("fbEmail");
-const elPass = document.getElementById("fbPassword");
-const btnCreate = document.getElementById("fbCreateAccount");
-const btnSignIn = document.getElementById("fbSignIn");
-const btnSignOut = document.getElementById("fbSignOut");
-const btnPush = document.getElementById("fbPush");
-const btnPull = document.getElementById("fbPull");
-const btnUseLocal = document.getElementById("fbUseLocal");
-const fbMsg = document.getElementById("fbMsg");
-const fbStatus = document.getElementById("fbStatus");
+    <!-- Simple local lock -->
+    <section id="loginView" class="card">
+      <h2>Enter Password</h2>
+      <p class="muted">Simple local lock (not secure). Default: <b>lift</b></p>
+      <div class="row wrap">
+        <input id="pwInput" type="password" placeholder="Password" />
+        <button id="pwBtn" class="primary">Unlock</button>
+      </div>
+      <p id="pwMsg" class="error"></p>
+    </section>
 
-function showErr(e) {
-  const msg = e?.message ? e.message : String(e);
-  fbMsg.textContent = "Firebase: " + msg;
-  console.error(e);
-}
-function clearErr() { fbMsg.textContent = ""; }
-function showStatus(t) { fbStatus.textContent = t || ""; }
+    <!-- Main app -->
+    <main id="mainView" class="hidden">
 
-// IMPORTANT: This must match your app’s localStorage key.
-const LOCAL_KEY = "lt_data_v2";
+      <!-- Firebase / Cloud Sync -->
+      <section class="card" id="authCard">
+        <h2>Cloud Sync (Firebase)</h2>
+        <p class="muted">
+          Sign in to sync routines + workout history across devices.
+          Local storage remains a backup.
+        </p>
 
-async function cloudSave(uid, dataObj) {
-  await setDoc(doc(db, "users", uid), { data: dataObj, updatedAt: Date.now() }, { merge: true });
-}
-async function cloudLoad(uid) {
-  const snap = await getDoc(doc(db, "users", uid));
-  if (!snap.exists()) return null;
-  return snap.data()?.data ?? null;
-}
+        <div class="row wrap">
+          <input id="fbEmail" type="email" placeholder="Email" />
+          <input id="fbPassword" type="password" placeholder="Password" />
+          <button class="btn" id="fbSignUp">Create account</button>
+          <button class="btn" id="fbSignIn">Sign in</button>
+          <button class="btn danger" id="fbSignOut" style="display:none;">Sign out</button>
+        </div>
 
-async function pushLocalToCloud(user) {
-  const raw = localStorage.getItem(LOCAL_KEY);
-  if (!raw) throw new Error(`No local data found in localStorage key: ${LOCAL_KEY}`);
-  const data = JSON.parse(raw);
-  await cloudSave(user.uid, data);
-  showStatus("✅ Pushed local → cloud.");
-}
+        <details class="mt">
+          <summary>Advanced</summary>
+          <div class="row wrap mt">
+            <button class="btn ghost" id="btnPushCloud" style="display:none;">Push local → cloud</button>
+            <button class="btn ghost" id="btnPullCloud" style="display:none;">Pull cloud → local</button>
+            <button class="btn ghost" id="btnUseLocal">Use local (overwrite in-app)</button>
+          </div>
+          <p class="muted tiny">
+            Pull overwrites your local backup with cloud. Push overwrites cloud with your local data.
+          </p>
+        </details>
 
-async function pullCloudToLocal(user) {
-  const data = await cloudLoad(user.uid);
-  if (!data) throw new Error("No cloud data found for this user yet.");
-  localStorage.setItem(LOCAL_KEY, JSON.stringify(data));
-  showStatus("✅ Pulled cloud → local. Reloading…");
-  setTimeout(() => location.reload(), 400);
-}
+        <div class="msg error" id="fbMsg"></div>
+        <div class="msg ok" id="fbStatus"></div>
+      </section>
 
-// Auth handlers
-btnCreate.addEventListener("click", async () => {
-  clearErr(); showStatus("");
-  const email = elEmail.value.trim();
-  const pass = elPass.value;
-  if (!email || !pass) { fbMsg.textContent = "Email and password required."; return; }
-  try {
-    await createUserWithEmailAndPassword(auth, email, pass);
-    showStatus("✅ Account created and signed in.");
-  } catch (e) { showErr(e); }
-});
+      <!-- Tabs -->
+      <nav class="tabs">
+        <button class="tab active" data-tab="log">Log</button>
+        <button class="tab" data-tab="routines">Routines</button>
+        <button class="tab" data-tab="history">History</button>
+        <button class="tab" data-tab="reports">Reports</button>
+      </nav>
 
-btnSignIn.addEventListener("click", async () => {
-  clearErr(); showStatus("");
-  const email = elEmail.value.trim();
-  const pass = elPass.value;
-  if (!email || !pass) { fbMsg.textContent = "Email and password required."; return; }
-  try {
-    await signInWithEmailAndPassword(auth, email, pass);
-    showStatus("✅ Signed in.");
-  } catch (e) { showErr(e); }
-});
+      <!-- LOG -->
+      <section class="panel active" data-panel="log">
+        <div class="card">
+          <h2>Start a Workout</h2>
+          <div class="row wrap">
+            <label class="field">
+              <span class="label">Day</span>
+              <select id="daySelect"></select>
+            </label>
 
-btnSignOut.addEventListener("click", async () => {
-  clearErr(); showStatus("");
-  try {
-    await signOut(auth);
-    showStatus("Signed out.");
-  } catch (e) { showErr(e); }
-});
+            <label class="chip">
+              <input type="checkbox" id="logCompoundOnly" />
+              Compound only
+            </label>
 
-btnUseLocal.addEventListener("click", () => {
-  clearErr();
-  showStatus("Using local only. (Cloud is optional.)");
-});
+            <button class="btn" id="startWorkoutBtn">Start workout</button>
+            <button class="btn ghost" id="clearWorkoutBtn">Clear</button>
+            <button class="btn" id="saveWorkoutBtn">Save workout</button>
+          </div>
 
-// Show/hide controls on auth state
-onAuthStateChanged(auth, (user) => {
-  if (user) {
-    btnSignOut.style.display = "inline-block";
-    btnPush.style.display = "inline-block";
-    btnPull.style.display = "inline-block";
-    showStatus(`Signed in as ${user.email}`);
+          <div class="muted tiny mt" id="logHint">
+            Titles show PR: <b>top weight</b> + <b>best reps at that weight</b>.
+            Enter a weight and you’ll see your best reps ever at that weight.
+          </div>
+        </div>
 
-    btnPush.onclick = async () => {
-      clearErr(); showStatus("");
-      try { await pushLocalToCloud(user); }
-      catch (e) { showErr(e); }
-    };
+        <div class="card" id="workoutCard">
+          <h2>Workout</h2>
+          <div id="exerciseLogList" class="list"></div>
+        </div>
+      </section>
 
-    btnPull.onclick = async () => {
-      clearErr(); showStatus("");
-      try { await pullCloudToLocal(user); }
-      catch (e) { showErr(e); }
-    };
+      <!-- ROUTINES -->
+      <section class="panel hidden" data-panel="routines">
+        <div class="card">
+          <h2>Routines</h2>
+          <p class="muted">Keep old routines. Clone active to create a new version, then swap exercises.</p>
 
-  } else {
-    btnSignOut.style.display = "none";
-    btnPush.style.display = "none";
-    btnPull.style.display = "none";
-  }
-});
+          <div class="row wrap">
+            <button class="btn" id="newRoutineBtn">New routine</button>
+            <button class="btn" id="cloneRoutineBtn">Clone active</button>
+            <button class="btn ghost" id="renameRoutineBtn">Rename active</button>
+            <button class="btn danger" id="deleteRoutineBtn">Delete active</button>
+          </div>
 
-// ======================= Your App (Local storage based) =======================
-// Below is a minimal working skeleton that will not break your UI.
-// If you already had a full working lifting tracker, paste it HERE instead,
-// but keep the Firebase section above intact.
+          <div class="row wrap mt">
+            <label class="field">
+              <span class="label">Active routine</span>
+              <select id="routineSelect"></select>
+            </label>
+            <button class="btn" id="setActiveBtn">Set active</button>
 
-const $ = (id) => document.getElementById(id);
+            <label class="chip">
+              <input type="checkbox" id="routineCompoundOnly" />
+              View compound only
+            </label>
+          </div>
 
-// Tabs
-document.querySelectorAll(".tab").forEach(btn => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach(b => b.classList.remove("active"));
-    btn.classList.add("active");
-    const tab = btn.dataset.tab;
-    document.querySelectorAll(".tabpage").forEach(p => p.classList.remove("active"));
-    $(`tab-${tab}`).classList.add("active");
-  });
-});
+          <div class="divider"></div>
 
-// Export/Import JSON
-$("exportBtn").addEventListener("click", () => {
-  const raw = localStorage.getItem(LOCAL_KEY) || "{}";
-  const blob = new Blob([raw], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "lifting-tracker.json";
-  a.click();
-  URL.revokeObjectURL(url);
-});
+          <div class="row wrap">
+            <label class="field">
+              <span class="label">Day</span>
+              <select id="routineDaySelect"></select>
+            </label>
+            <button class="btn ghost" id="addDayBtn">+ Day</button>
+            <button class="btn danger" id="deleteDayBtn">Delete day</button>
+          </div>
 
-$("importBtn").addEventListener("click", () => $("importFile").click());
+          <div class="row wrap mt">
+            <input id="newExerciseInput" placeholder="Add exercise (e.g., Bench Press)" />
+            <select id="newExerciseTag">
+              <option value="compound">compound</option>
+              <option value="accessory">accessory</option>
+            </select>
+            <button class="btn" id="addExerciseBtn">Add</button>
+          </div>
 
-$("importFile").addEventListener("change", async (e) => {
-  const file = e.target.files?.[0];
-  if (!file) return;
-  const text = await file.text();
-  try {
-    JSON.parse(text);
-    localStorage.setItem(LOCAL_KEY, text);
-    alert("Imported. Reloading…");
-    location.reload();
-  } catch {
-    alert("Invalid JSON.");
-  }
-});
+          <div class="divider"></div>
 
-// Minimal placeholder to avoid empty UI
-$("activeRoutineLabel").textContent = "Local mode";
-$("daySelect").innerHTML = `<option>Push</option><option>Pull</option><option>Legs</option>`;
-$("workoutArea").innerHTML = `<div class="muted">Your workout UI comes from your original app code.</div>`;
-$("routinesArea").innerHTML = `<div class="muted">Your routines UI comes from your original app code.</div>`;
-$("historyArea").innerHTML = `<div class="muted">Your history UI comes from your original app code.</div>`;
-$("reportExercise").innerHTML = `<option>Bench Press</option><option>Squat</option><option>Row</option>`;
-$("reportTable").innerHTML = `<div class="muted">Your report table comes from your original app code.</div>`;
+          <h3>Exercises</h3>
+          <div id="exerciseList" class="list"></div>
+
+          <div class="divider"></div>
+
+          <h3>Swap an Exercise</h3>
+          <p class="muted tiny">Swap within the selected routine/day only.</p>
+          <div class="row wrap">
+            <select id="swapFrom"></select>
+            <input id="swapTo" placeholder="New exercise name" />
+            <select id="swapTag">
+              <option value="compound">compound</option>
+              <option value="accessory">accessory</option>
+            </select>
+            <button class="btn" id="btnSwap">Swap</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Local password</h2>
+          <p class="muted">Optional: change local password.</p>
+          <div class="row wrap">
+            <input id="newPw" type="password" placeholder="New password" />
+            <button id="setPwBtn" class="btn ghost">Set Password</button>
+          </div>
+          <p class="muted tiny">Security note: simple local lock only.</p>
+        </div>
+      </section>
+
+      <!-- HISTORY -->
+      <section class="panel hidden" data-panel="history">
+        <div class="card">
+          <h2>History</h2>
+          <div class="row wrap">
+            <button id="exportJsonBtn" class="btn ghost">Export JSON</button>
+            <button id="exportCsvBtn" class="btn ghost">Export CSV</button>
+            <button id="clearAllBtn" class="btn danger">Clear ALL Data</button>
+            <input id="historySearch" placeholder="Search exercise…" />
+          </div>
+          <div id="historyList" class="list"></div>
+        </div>
+      </section>
+
+      <!-- REPORTS -->
+      <section class="panel hidden" data-panel="reports">
+        <div class="card">
+          <h2>Reports</h2>
+          <div class="row wrap">
+            <label class="chip">
+              <input type="checkbox" id="reportCompoundOnly" />
+              Compound only
+            </label>
+
+            <label class="field">
+              <span class="label">Metric</span>
+              <select id="reportMetric">
+                <option value="e1rm">Estimated 1RM (best set)</option>
+                <option value="topWeight">Top weight (best set)</option>
+                <option value="volume">Total volume (sum weight×reps)</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span class="label">Exercise</span>
+              <select id="reportExercise"></select>
+            </label>
+          </div>
+
+          <div class="mt muted" id="reportSummary"></div>
+          <div class="divider"></div>
+          <div id="reportTable" class="list"></div>
+        </div>
+
+        <div class="card">
+          <h2>Trend Chart</h2>
+          <canvas id="reportChart" height="220"></canvas>
+          <p class="muted tiny mt">Uses your best set per workout for the selected exercise.</p>
+        </div>
+      </section>
+
+      <footer class="footer muted tiny">
+        Local backup + Firebase cloud sync. Export JSON anytime.
+      </footer>
+    </main>
+  </div>
+
+  <script type="module" src="script.js"></script>
+</body>
+</html>
