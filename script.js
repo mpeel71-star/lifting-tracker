@@ -1,4 +1,4 @@
-alert("script.js is running");
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
 // ================= Firebase (Auth + Firestore) =================
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
 import {
