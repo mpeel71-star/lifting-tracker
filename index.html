@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Lifting Tracker</title>
   <link rel="stylesheet" href="style.css" />
+
   <!-- Charts -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
@@ -15,52 +16,46 @@
         <div class="logo">🏋️</div>
         <div>
           <div class="title">Lifting Tracker</div>
-          <div class="subtitle" id="cloudLabel">Local mode</div>
+          <div class="subtitle" id="activeRoutineLabel"></div>
         </div>
       </div>
 
-      <div class="top-actions">
-        <button class="btn ghost" id="btnExport">Export JSON</button>
-        <label class="btn ghost file">
-          Import JSON
-          <input id="fileImport" type="file" accept="application/json" />
-        </label>
+      <div class="actions">
+        <button id="exportBtn" class="btn">Export JSON</button>
+        <button id="importBtn" class="btn btn-primary">Import JSON</button>
+        <input id="importFile" type="file" accept="application/json" style="display:none" />
       </div>
     </header>
 
-    <!-- Firebase Auth / Cloud Sync -->
-    <section class="card" id="authCard">
+    <!-- Firebase Cloud Sync -->
+    <section class="card" id="firebaseAuth">
       <h2>Cloud Sync (Firebase)</h2>
       <p class="muted">
-        Sign in to sync routines + workout history across devices. Local storage remains as a backup.
+        Sign in to sync routines + workout history across devices. Local storage remains a backup.
       </p>
 
       <div class="row">
         <input id="fbEmail" type="email" placeholder="Email" />
         <input id="fbPassword" type="password" placeholder="Password" />
+        <button id="fbCreateAccount" class="btn btn-primary">Create account</button>
+        <button id="fbSignIn" class="btn">Sign in</button>
+        <button id="fbSignOut" class="btn" style="display:none">Sign out</button>
       </div>
 
-      <div class="row wrap">
-        <button class="btn" id="fbSignUp">Create account</button>
-        <button class="btn" id="fbSignIn">Sign in</button>
-        <button class="btn danger" id="fbSignOut" style="display:none;">Sign out</button>
-        <button class="btn" id="fbSyncNow" style="display:none;">Sync now</button>
-      </div>
-
-      <div class="msg error" id="fbMsg"></div>
-      <div class="msg ok" id="fbStatus"></div>
-
-      <details class="mt">
+      <details class="advanced">
         <summary>Advanced</summary>
-        <div class="row wrap mt">
-          <button class="btn ghost" id="btnUseLocal">Use local (overwrite in-app)</button>
-          <button class="btn ghost" id="btnPullCloud" style="display:none;">Pull cloud → overwrite local</button>
-          <button class="btn ghost" id="btnPushCloud" style="display:none;">Push local → overwrite cloud</button>
+        <div class="row" style="margin-top:10px;">
+          <button id="fbPush" class="btn btn-primary" style="display:none;">Push local → cloud</button>
+          <button id="fbPull" class="btn" style="display:none;">Pull cloud → local</button>
+          <button id="fbUseLocal" class="btn">Use local (overwrite in-app)</button>
         </div>
         <p class="muted tiny">
-          “Pull” replaces local backup with cloud. “Push” replaces cloud with your current local data.
+          “Pull” replaces your local backup with cloud. “Push” replaces cloud with your current local data.
         </p>
       </details>
+
+      <div id="fbMsg" class="error" style="margin-top:10px;"></div>
+      <div id="fbStatus" class="success" style="margin-top:6px;"></div>
     </section>
 
     <!-- Tabs -->
@@ -71,150 +66,84 @@
       <button class="tab" data-tab="reports">Reports</button>
     </nav>
 
-    <main class="main">
+    <main>
       <!-- LOG -->
-      <section class="panel active" id="tab-log">
+      <section id="tab-log" class="tabpage active">
         <div class="card">
           <h2>Start a Workout</h2>
-          <div class="row wrap">
-            <label class="field">
-              <span class="label">Day</span>
-              <select id="logDay"></select>
-            </label>
+          <div class="row">
+            <label class="label">Day</label>
+            <select id="daySelect"></select>
 
             <label class="chip">
-              <input type="checkbox" id="logCompoundOnly" />
+              <input id="compoundOnly" type="checkbox" />
               Compound only
             </label>
 
-            <button class="btn" id="btnStartWorkout">Start workout</button>
-            <button class="btn ghost" id="btnClearWorkout">Clear</button>
-            <button class="btn" id="btnSaveWorkout">Save workout</button>
+            <button id="startWorkout" class="btn btn-primary">Start workout</button>
+            <button id="clearWorkout" class="btn">Clear</button>
+            <button id="saveWorkout" class="btn btn-primary">Save workout</button>
           </div>
-
-          <div class="muted tiny mt" id="logHint">
-            Exercise titles show PR: <b>top weight</b> + <b>best reps at that weight</b>. Enter a weight to see your best reps ever at that weight.
-          </div>
+          <p class="muted tiny">
+            Exercise titles show PR: top weight + best reps at that weight. Enter a weight to see your best reps ever at that weight.
+          </p>
         </div>
 
-        <div class="card" id="workoutCard">
+        <div class="card">
           <h2>Workout</h2>
-          <div id="workoutList" class="list"></div>
+          <div id="workoutArea"></div>
         </div>
       </section>
 
       <!-- ROUTINES -->
-      <section class="panel" id="tab-routines">
+      <section id="tab-routines" class="tabpage">
         <div class="card">
           <h2>Routines</h2>
-          <p class="muted">Keep old routines. Clone active to create a new version, then swap exercises.</p>
-
-          <div class="row wrap">
-            <button class="btn" id="btnNewRoutine">New routine</button>
-            <button class="btn" id="btnCloneRoutine">Clone active</button>
-            <button class="btn ghost" id="btnRenameRoutine">Rename active</button>
-            <button class="btn danger" id="btnDeleteRoutine">Delete active</button>
-          </div>
-
-          <div class="row wrap mt">
-            <label class="field">
-              <span class="label">Active routine</span>
-              <select id="routineSelect"></select>
-            </label>
-            <button class="btn" id="btnSetActive">Set active</button>
-          </div>
-        </div>
-
-        <div class="card">
-          <h2>Days & Exercises</h2>
-
-          <div class="row wrap">
-            <label class="field">
-              <span class="label">Day</span>
-              <select id="routineDay"></select>
-            </label>
-            <button class="btn ghost" id="btnAddDay">+ Day</button>
-            <button class="btn danger" id="btnDeleteDay">Delete day</button>
-          </div>
-
-          <div class="row wrap mt">
-            <input id="newExerciseName" placeholder="Add exercise (e.g., Bench Press)" />
-            <select id="newExerciseTag">
-              <option value="compound">compound</option>
-              <option value="accessory">accessory</option>
-            </select>
-            <button class="btn" id="btnAddExercise">Add</button>
-            <label class="chip">
-              <input type="checkbox" id="routineCompoundOnly" />
-              View compound only
-            </label>
-          </div>
-
-          <div class="divider"></div>
-          <div id="routineExercises" class="list"></div>
-
-          <div class="divider"></div>
-          <h3>Replace Exercise (Swap)</h3>
-          <p class="muted tiny">Replaces inside the selected routine/day only.</p>
-          <div class="row wrap">
-            <select id="swapFrom"></select>
-            <input id="swapTo" placeholder="New exercise name" />
-            <select id="swapTag">
-              <option value="compound">compound</option>
-              <option value="accessory">accessory</option>
-            </select>
-            <button class="btn" id="btnSwap">Swap</button>
-          </div>
+          <div id="routinesArea"></div>
         </div>
       </section>
 
       <!-- HISTORY -->
-      <section class="panel" id="tab-history">
+      <section id="tab-history" class="tabpage">
         <div class="card">
           <h2>History</h2>
-          <div class="row wrap">
-            <input id="historySearch" placeholder="Search exercise…" />
-            <button class="btn ghost" id="btnClearHistorySearch">Clear</button>
-          </div>
-        </div>
-
-        <div class="card">
-          <div id="historyList" class="list"></div>
+          <div id="historyArea"></div>
         </div>
       </section>
 
       <!-- REPORTS -->
-      <section class="panel" id="tab-reports">
+      <section id="tab-reports" class="tabpage">
         <div class="card">
           <h2>Reports</h2>
-          <div class="row wrap">
+
+          <div class="row">
             <label class="chip">
-              <input type="checkbox" id="reportCompoundOnly" />
+              <input id="reportCompoundOnly" type="checkbox" />
               Compound only
             </label>
 
-            <label class="field">
-              <span class="label">Metric</span>
-              <select id="reportMetric">
-                <option value="e1rm">Estimated 1RM (best set)</option>
-                <option value="topWeight">Top weight (best set)</option>
-                <option value="volume">Total volume (sum weight×reps)</option>
-              </select>
-            </label>
-
-            <label class="field">
-              <span class="label">Exercise</span>
-              <select id="reportExercise"></select>
-            </label>
+            <label class="label">Metric</label>
+            <select id="reportMetric">
+              <option value="e1rm">Estimated 1RM (best set)</option>
+              <option value="topWeight">Top weight (best set)</option>
+              <option value="volume">Total volume (sum weight×reps)</option>
+            </select>
           </div>
 
-          <div class="mt muted" id="reportSummary"></div>
+          <div class="row">
+            <label class="label">Exercise</label>
+            <select id="reportExercise"></select>
+          </div>
+
+          <div id="reportSummary" class="muted"></div>
+          <div class="divider"></div>
+          <div id="reportTable" class="list"></div>
         </div>
 
         <div class="card">
           <h2>Trend Chart</h2>
           <canvas id="reportChart" height="220"></canvas>
-          <p class="muted tiny mt">Uses your best set per workout for the selected exercise.</p>
+          <p class="muted tiny">Tip: chart uses your best set per workout for the selected exercise.</p>
         </div>
       </section>
     </main>
@@ -224,6 +153,7 @@
     </footer>
   </div>
 
+  <!-- IMPORTANT: type="module" is required because script.js uses import -->
   <script type="module" src="script.js"></script>
 </body>
 </html>
