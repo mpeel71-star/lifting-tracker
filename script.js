@@ -1,3 +1,44 @@
+// ================= Firebase (Auth + Firestore) =================
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
+import {
+  getAuth,
+  onAuthStateChanged,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut
+} from "https://www.gstatic.com/firebasejs/12.9.0/firebase-auth.js";
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc
+} from "https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDwL1Qo-aqD-3Dy2EGafZMF2VWEB0rkQao",
+  authDomain: "lifting-tracker-5ff1b.firebaseapp.com",
+  projectId: "lifting-tracker-5ff1b",
+  storageBucket: "lifting-tracker-5ff1b.firebasestorage.app",
+  messagingSenderId: "880909478435",
+  appId: "1:880909478435:web:43cd4c5b24a136b4f5df96",
+  measurementId: "G-8PMT4LHEXT"
+};
+
+const fbApp = initializeApp(firebaseConfig);
+const auth = getAuth(fbApp);
+const db = getFirestore(fbApp);
+
+async function cloudLoad(uid) {
+  const ref = doc(db, "users", uid);
+  const snap = await getDoc(ref);
+  return snap.exists() ? (snap.data().data ?? null) : null;
+}
+
+async function cloudSave(uid, dataObj) {
+  const ref = doc(db, "users", uid);
+  await setDoc(ref, { data: dataObj, updatedAt: Date.now() }, { merge: true });
+}
+// ================= End Firebase =================
 // ====== Storage Keys ======
 const KEY = {
   data: "lt_data_v2",
