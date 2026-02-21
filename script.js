@@ -1,52 +1,17 @@
-// ===========================
-// Lifting Tracker + Firebase Sync
-// ===========================
-
-// ---------- Firebase (Auth + Firestore) ----------
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
-import {
-  getAuth,
-  onAuthStateChanged,
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut
-} from "https://www.gstatic.com/firebasejs/12.9.0/firebase-auth.js";
-import {
-  getFirestore,
-  doc,
-  getDoc,
-  setDoc
-} from "https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js";
-
-const firebaseConfig = {
-  apiKey: "AIzaSyDwLIqo-aqD-D3yzEGafZMF2VWEB0rkQao",
-  authDomain: "lifting-tracker-5ff1b.firebaseapp.com",
-  projectId: "lifting-tracker-5ff1b",
-  storageBucket: "lifting-tracker-5ff1b.firebasestorage.app",
-  messagingSenderId: "880909478435",
-  appId: "1:880909478435:web:43cd4c5b24a136b4f5df96",
-  measurementId: "G-8PMT4LHEXT"
+// ====== Storage Keys ======
+const KEY = {
+  data: "lt_data_v2",
+  pw: "lt_pw_v2",
+  session: "lt_session_unlocked_v2",
+  legacy: "lt_data_v1"
 };
 
-const fbApp = initializeApp(firebaseConfig);
-const auth = getAuth(fbApp);
-const db = getFirestore(fbApp);
-
-// ---------- DOM helpers ----------
-const $ = (id) => document.getElementById(id);
-const setText = (id, txt) => { const el = $(id); if (el) el.textContent = txt || ""; };
-const show = (id, on) => { const el = $(id); if (el) el.style.display = on ? "" : "none"; };
-const cls = (el, c, on) => el && el.classList.toggle(c, !!on);
-
-// ---------- Storage ----------
-const LS_KEY = "lt_data_v3";
-const LS_PW = "lt_pw_v1";
-
+// ====== Default Data ======
 function defaultData() {
   const now = Date.now();
   const routineId = crypto.randomUUID();
   return {
-    schemaVersion: 3,
+    schemaVersion: 2,
     activeRoutineId: routineId,
     routines: [
       {
@@ -55,868 +20,1217 @@ function defaultData() {
         createdAt: now,
         days: [
           { name: "Push", exercises: [
-            { name: "Bench Press", tag: "compound" },
-            { name: "Incline DB Press", tag: "compound" },
-            { name: "Overhead Press", tag: "compound" },
-            { name: "Triceps Pushdown", tag: "accessory" }
+            { name:"Bench Press", tag:"compound" },
+            { name:"Overhead Press", tag:"compound" },
+            { name:"Incline DB Press", tag:"accessory" },
+            { name:"Triceps Pushdown", tag:"accessory" }
           ]},
           { name: "Pull", exercises: [
-            { name: "Pull-up / Lat Pulldown", tag: "compound" },
-            { name: "Barbell Row", tag: "compound" },
-            { name: "Face Pull", tag: "accessory" },
-            { name: "Biceps Curl", tag: "accessory" }
+            { name:"Pull-up / Lat Pulldown", tag:"compound" },
+            { name:"Barbell Row", tag:"compound" },
+            { name:"Face Pull", tag:"accessory" },
+            { name:"Biceps Curl", tag:"accessory" }
           ]},
           { name: "Legs", exercises: [
-            { name: "Squat", tag: "compound" },
-            { name: "RDL", tag: "compound" },
-            { name: "Leg Press", tag: "compound" },
-            { name: "Calf Raise", tag: "accessory" }
+            { name:"Back Squat", tag:"compound" },
+            { name:"RDL", tag:"compound" },
+            { name:"Leg Press", tag:"accessory" },
+            { name:"Calf Raise", tag:"accessory" }
           ]}
         ]
       }
     ],
-    history: [], // workout entries
-    updatedAt: now
+    workouts: [] // {id,date,routineId,routineName,dayName,entries:[{exercise, sets:[{weight,reps}]}]}
   };
 }
 
-function loadLocal() {
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (!raw) return defaultData();
-    const data = JSON.parse(raw);
-    if (!data || !data.routines) return defaultData();
-    return data;
-  } catch {
-    return defaultData();
+// ====== Load/Save + Migration from v1 ======
+function loadData() {
+  // If v2 exists, use it
+  const rawV2 = localStorage.getItem(KEY.data);
+  if (rawV2) {
+    try {
+      const d = JSON.parse(rawV2);
+      return normalizeAndMigrate(d);
+    } catch {
+      const d = defaultData();
+      saveData(d);
+      return d;
+    }
   }
+
+  // Else, try legacy v1
+  const rawV1 = localStorage.getItem(KEY.legacy);
+  if (rawV1) {
+    try {
+      const legacy = JSON.parse(rawV1);
+      const migrated = migrateFromV1(legacy);
+      saveData(migrated);
+      return migrated;
+    } catch {
+      const d = defaultData();
+      saveData(d);
+      return d;
+    }
+  }
+
+  // Else new
+  const d = defaultData();
+  saveData(d);
+  return d;
 }
 
-function saveLocal(data) {
-  data.updatedAt = Date.now();
-  localStorage.setItem(LS_KEY, JSON.stringify(data));
+function saveData(d) {
+  localStorage.setItem(KEY.data, JSON.stringify(d));
 }
 
-function getLocalPassword() {
-  return localStorage.getItem(LS_PW) || "lift";
+function migrateFromV1(v1) {
+  // v1 routines had exercises as strings; v1 workouts are compatible (exercise name is string)
+  const d = {
+    schemaVersion: 2,
+    activeRoutineId: v1.activeRoutineId,
+    routines: (v1.routines || []).map(r => ({
+      id: r.id,
+      name: r.name,
+      createdAt: r.createdAt || Date.now(),
+      days: (r.days || []).map(day => ({
+        name: day.name,
+        exercises: (day.exercises || []).map(ex => ({
+          name: typeof ex === "string" ? ex : ex?.name || "Exercise",
+          tag: "compound" // default; you can edit tags after migration
+        }))
+      }))
+    })),
+    workouts: Array.isArray(v1.workouts) ? v1.workouts : []
+  };
+
+  // If something went weird, ensure at least one routine exists
+  if (!d.routines.length) {
+    const def = defaultData();
+    d.routines = def.routines;
+    d.activeRoutineId = def.activeRoutineId;
+  }
+  return d;
 }
 
-function setLocalPassword(pw) {
-  localStorage.setItem(LS_PW, pw);
+function normalizeAndMigrate(d) {
+  // Ensure schemaVersion
+  if (!d.schemaVersion) d.schemaVersion = 2;
+
+  // Normalize routines/day/exercises to object form {name, tag}
+  d.routines = (d.routines || []).map(r => ({
+    ...r,
+    days: (r.days || []).map(day => ({
+      ...day,
+      exercises: (day.exercises || []).map(ex => {
+        if (typeof ex === "string") return { name: ex, tag: "compound" };
+        return {
+          name: ex?.name || "Exercise",
+          tag: ex?.tag === "accessory" ? "accessory" : "compound"
+        };
+      })
+    }))
+  }));
+
+  // Ensure workouts array
+  d.workouts = Array.isArray(d.workouts) ? d.workouts : [];
+
+  // Ensure active routine id points somewhere
+  if (!d.activeRoutineId || !d.routines.some(r => r.id === d.activeRoutineId)) {
+    d.activeRoutineId = d.routines[0]?.id || crypto.randomUUID();
+  }
+
+  return d;
 }
 
-// ---------- App state ----------
-let state = {
-  data: loadLocal(),
-  unlocked: false,
-  currentUser: null,
-  activeWorkout: null, // { routineId, dayName, startedAt, exercises:[{name, tag, sets:[]}] }
-  chart: null
-};
+// ====== Password ======
+function getPassword() {
+  return localStorage.getItem(KEY.pw) || "lift";
+}
+function setPassword(pw) {
+  localStorage.setItem(KEY.pw, pw);
+}
+function isUnlocked() {
+  return sessionStorage.getItem(KEY.session) === "1";
+}
+function unlock() {
+  sessionStorage.setItem(KEY.session, "1");
+}
 
-// ---------- UI wiring (tabs) ----------
-function initTabs() {
-  const tabs = Array.from(document.querySelectorAll(".tab"));
-  tabs.forEach(t => {
-    t.addEventListener("click", () => {
-      tabs.forEach(x => x.classList.remove("active"));
-      t.classList.add("active");
-      const tab = t.dataset.tab;
-      Array.from(document.querySelectorAll(".panel")).forEach(p => {
-        const on = p.dataset.panel === tab;
-        p.classList.toggle("hidden", !on);
-        p.classList.toggle("active", on);
-      });
+// ====== Helpers ======
+function $(sel) { return document.querySelector(sel); }
+function $all(sel) { return Array.from(document.querySelectorAll(sel)); }
+function formatDate(ts) {
+  const d = new Date(ts);
+  return d.toLocaleString(undefined, { year:"numeric", month:"short", day:"2-digit", hour:"2-digit", minute:"2-digit" });
+}
+function clampNum(n) {
+  if (Number.isNaN(n) || !Number.isFinite(n)) return 0;
+  return n;
+}
+function est1RM(weight, reps) {
+  if (!weight || !reps) return 0;
+  return weight * (1 + reps / 30);
+}
+function unique(arr) {
+  return Array.from(new Set(arr));
+}
+function normalizeName(s) {
+  return (s || "").trim();
+}
+function downloadFile(filename, content, mime="application/octet-stream") {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ====== Stats Engine (from history) ======
+// Returns map: exerciseName -> { maxWeight, repsAtMaxWeight, bestE1RM, bestSet:{weight,reps,oneRM}, repsByWeight: Map(weightStr->maxReps) }
+function buildExerciseStats(workouts) {
+  const stats = new Map();
+
+  for (const w of workouts) {
+    for (const entry of (w.entries || [])) {
+      const ex = normalizeName(entry.exercise);
+      if (!ex) continue;
+
+      if (!stats.has(ex)) {
+        stats.set(ex, {
+          maxWeight: 0,
+          repsAtMaxWeight: 0,
+          bestE1RM: 0,
+          bestSet: null,
+          repsByWeight: new Map()
+        });
+      }
+      const s = stats.get(ex);
+
+      for (const set of (entry.sets || [])) {
+        const weight = clampNum(Number(set.weight));
+        const reps = clampNum(Number(set.reps));
+        if (weight <= 0 || reps <= 0) continue;
+
+        // max weight + reps at that weight
+        if (weight > s.maxWeight) {
+          s.maxWeight = weight;
+          s.repsAtMaxWeight = reps;
+        } else if (weight === s.maxWeight && reps > s.repsAtMaxWeight) {
+          s.repsAtMaxWeight = reps;
+        }
+
+        // reps by weight
+        const key = String(weight);
+        const prev = s.repsByWeight.get(key) || 0;
+        if (reps > prev) s.repsByWeight.set(key, reps);
+
+        // best e1rm
+        const one = est1RM(weight, reps);
+        if (one > s.bestE1RM) {
+          s.bestE1RM = one;
+          s.bestSet = { weight, reps, oneRM: one };
+        }
+      }
+    }
+  }
+
+  return stats;
+}
+
+// ====== App State ======
+let data = loadData();
+let currentWorkout = null; // {routineId,routineName,dayName,date,entries:[{exercise, tag, sets:[{weight,reps}]}]}
+let exerciseStats = buildExerciseStats(data.workouts);
+
+// Charts
+let reportChart = null;
+
+// ====== Tabs ======
+function setupTabs() {
+  $all(".tab").forEach(btn => {
+    btn.addEventListener("click", () => {
+      $all(".tab").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+
+      const tab = btn.dataset.tab;
+      $all(".panel").forEach(p => p.classList.add("hidden"));
+      document.querySelector(`.panel[data-panel="${tab}"]`).classList.remove("hidden");
+
+      // refresh tab content
       if (tab === "history") renderHistory();
       if (tab === "reports") renderReports();
-      if (tab === "routines") renderRoutines();
+      if (tab === "log") renderLogDaySelect();
+      if (tab === "routines") renderRoutineUI();
     });
   });
 }
 
-// ---------- Render helpers ----------
-function activeRoutine() {
-  return state.data.routines.find(r => r.id === state.data.activeRoutineId) || state.data.routines[0];
-}
+// ====== Login ======
+function setupLogin() {
+  const loginView = $("#loginView");
+  const mainView = $("#mainView");
 
-function uniqueExercisesFromHistory() {
-  const set = new Set();
-  for (const w of state.data.history) {
-    for (const ex of w.exercises) set.add(ex.name);
+  if (isUnlocked()) {
+    loginView.classList.add("hidden");
+    mainView.classList.remove("hidden");
+    return;
   }
-  return Array.from(set).sort((a,b)=>a.localeCompare(b));
-}
 
-function filterByCompoundOnly(exercises, compoundOnly) {
-  if (!compoundOnly) return exercises;
-  return exercises.filter(e => e.tag === "compound");
-}
-
-// ---------- Labels ----------
-function refreshLabels() {
-  const r = activeRoutine();
-  setText("activeRoutineLabel", r ? `Active: ${r.name}` : "");
-  setText("cloudLabel", state.currentUser ? `Cloud: ${state.currentUser.email}` : "Local mode");
-}
-
-// ---------- Login lock ----------
-function initLock() {
-  $("pwBtn").addEventListener("click", () => {
-    const pw = ($("pwInput").value || "").trim();
-    if (!pw) { setText("pwMsg", "Enter a password."); return; }
-    if (pw !== getLocalPassword()) { setText("pwMsg", "Wrong password."); return; }
-    state.unlocked = true;
-    setText("pwMsg", "");
-    cls($("loginView"), "hidden", true);
-    cls($("mainView"), "hidden", false);
-    bootAppUI();
-  });
-
-  $("pwInput").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") $("pwBtn").click();
-  });
-}
-
-// ---------- Firebase UI ----------
-function fbMsg(errTxt = "", okTxt = "") {
-  setText("fbMsg", errTxt);
-  setText("fbStatus", okTxt);
-}
-
-function userDocRef(uid) {
-  return doc(db, "users", uid);
-}
-
-async function cloudLoad(uid) {
-  const ref = userDocRef(uid);
-  const snap = await getDoc(ref);
-  if (!snap.exists()) return null;
-  const payload = snap.data();
-  return payload?.data ?? null;
-}
-
-async function cloudSave(uid, dataObj) {
-  const ref = userDocRef(uid);
-  await setDoc(ref, { data: dataObj, updatedAt: Date.now() }, { merge: true });
-}
-
-function initFirebaseUI() {
-  const emailEl = $("fbEmail");
-  const passEl  = $("fbPassword");
-
-  $("fbSignUp").addEventListener("click", async () => {
-    fbMsg("");
-    const email = (emailEl.value || "").trim();
-    const pass  = (passEl.value || "").trim();
-    if (!email || !pass) { fbMsg("Email and password required."); return; }
-    try {
-      await createUserWithEmailAndPassword(auth, email, pass);
-      fbMsg("", "Account created + signed in.");
-    } catch (e) {
-      fbMsg(`Firebase Error: ${e?.message || e}`);
+  $("#pwBtn").addEventListener("click", () => {
+    const pw = $("#pwInput").value || "";
+    if (pw === getPassword()) {
+      unlock();
+      $("#pwMsg").textContent = "";
+      loginView.classList.add("hidden");
+      mainView.classList.remove("hidden");
+      bootRender();
+    } else {
+      $("#pwMsg").textContent = "Incorrect password.";
     }
   });
 
-  $("fbSignIn").addEventListener("click", async () => {
-    fbMsg("");
-    const email = (emailEl.value || "").trim();
-    const pass  = (passEl.value || "").trim();
-    if (!email || !pass) { fbMsg("Email and password required."); return; }
-    try {
-      await signInWithEmailAndPassword(auth, email, pass);
-      fbMsg("", "Signed in successfully.");
-    } catch (e) {
-      fbMsg(`Firebase Error: ${e?.message || e}`);
-    }
-  });
-
-  $("fbSignOut").addEventListener("click", async () => {
-    fbMsg("");
-    try {
-      await signOut(auth);
-      fbMsg("", "Signed out.");
-    } catch (e) {
-      fbMsg(`Firebase Error: ${e?.message || e}`);
-    }
-  });
-
-  // Advanced: Push / Pull / Use local
-  $("btnPushCloud").addEventListener("click", async () => {
-    fbMsg("");
-    if (!state.currentUser) { fbMsg("Sign in first."); return; }
-    try {
-      await cloudSave(state.currentUser.uid, state.data);
-      fbMsg("", "✅ Pushed local → cloud.");
-    } catch (e) {
-      fbMsg(`Firebase Error: ${e?.message || e}`);
-    }
-  });
-
-  $("btnPullCloud").addEventListener("click", async () => {
-    fbMsg("");
-    if (!state.currentUser) { fbMsg("Sign in first."); return; }
-    try {
-      const cloud = await cloudLoad(state.currentUser.uid);
-      if (!cloud) { fbMsg("No cloud data yet for this user."); return; }
-      state.data = cloud;
-      saveLocal(state.data);
-      refreshLabels();
-      renderAll();
-      fbMsg("", "✅ Pulled cloud → local (overwrote local).");
-    } catch (e) {
-      fbMsg(`Firebase Error: ${e?.message || e}`);
-    }
-  });
-
-  $("btnUseLocal").addEventListener("click", () => {
-    fbMsg("", "Using local data in-app.");
-    state.data = loadLocal();
-    refreshLabels();
-    renderAll();
-  });
-
-  onAuthStateChanged(auth, async (user) => {
-    state.currentUser = user || null;
-    refreshLabels();
-
-    show("fbSignOut", !!user);
-    show("btnPushCloud", !!user);
-    show("btnPullCloud", !!user);
-
-    if (!user) return;
-
-    // If cloud exists, do NOT overwrite automatically. Just inform.
-    try {
-      const cloud = await cloudLoad(user.uid);
-      if (cloud) {
-        fbMsg("", "Cloud data found. Use Pull/Push in Advanced.");
-      } else {
-        fbMsg("", "No cloud data yet. Use Advanced → Push local → cloud to create it.");
-      }
-    } catch (e) {
-      fbMsg(`Firebase Error: ${e?.message || e}`);
-    }
+  $("#pwInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") $("#pwBtn").click();
   });
 }
 
-// ---------- Core app UI ----------
-function bootAppUI() {
-  initTabs();
-  initButtons();
-  refreshLabels();
-  renderAll();
+// ====== Active Routine ======
+function getActiveRoutine() {
+  return data.routines.find(r => r.id === data.activeRoutineId) || data.routines[0];
+}
+function setActiveRoutine(id) {
+  data.activeRoutineId = id;
+  saveData(data);
+  renderActiveRoutineLabel();
+}
+function renderActiveRoutineLabel() {
+  const r = getActiveRoutine();
+  $("#activeRoutineLabel").textContent = r ? `Active routine: ${r.name}` : "No routine";
 }
 
-function initButtons() {
-  // Export / Import
-  $("btnExport").addEventListener("click", () => exportJson(state.data));
-  $("exportJsonBtn").addEventListener("click", () => exportJson(state.data));
-  $("exportCsvBtn").addEventListener("click", () => exportCsv());
-
-  $("fileImport").addEventListener("change", async (e) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    try {
-      const txt = await f.text();
-      const obj = JSON.parse(txt);
-      if (!obj || !obj.routines) throw new Error("Invalid JSON (missing routines).");
-      state.data = obj;
-      saveLocal(state.data);
-      refreshLabels();
-      renderAll();
-      alert("Imported JSON successfully.");
-    } catch (err) {
-      alert(`Import failed: ${err?.message || err}`);
-    } finally {
-      e.target.value = "";
-    }
-  });
-
-  // Log buttons
-  $("startWorkoutBtn").addEventListener("click", startWorkout);
-  $("clearWorkoutBtn").addEventListener("click", () => {
-    state.activeWorkout = null;
-    renderWorkout();
-  });
-  $("saveWorkoutBtn").addEventListener("click", saveWorkout);
-
-  $("logCompoundOnly").addEventListener("change", renderWorkout);
-
-  // Routines buttons
-  $("newRoutineBtn").addEventListener("click", newRoutine);
-  $("cloneRoutineBtn").addEventListener("click", cloneRoutine);
-  $("renameRoutineBtn").addEventListener("click", renameRoutine);
-  $("deleteRoutineBtn").addEventListener("click", deleteRoutine);
-
-  $("setActiveBtn").addEventListener("click", () => {
-    const id = $("routineSelect").value;
-    if (!id) return;
-    state.data.activeRoutineId = id;
-    saveLocal(state.data);
-    refreshLabels();
-    renderAll();
-  });
-
-  $("addDayBtn").addEventListener("click", () => {
-    const r = activeRoutine();
-    const name = prompt("Day name?", "Day");
-    if (!name) return;
-    r.days.push({ name, exercises: [] });
-    saveLocal(state.data);
-    renderRoutines();
-    renderLogDaySelect();
-  });
-
-  $("deleteDayBtn").addEventListener("click", () => {
-    const r = activeRoutine();
-    const idx = $("routineDaySelect").selectedIndex;
-    if (idx < 0) return;
-    if (!confirm(`Delete day "${r.days[idx].name}"?`)) return;
-    r.days.splice(idx, 1);
-    saveLocal(state.data);
-    renderRoutines();
-    renderLogDaySelect();
-  });
-
-  $("addExerciseBtn").addEventListener("click", () => {
-    const r = activeRoutine();
-    const dIdx = $("routineDaySelect").selectedIndex;
-    if (dIdx < 0) return;
-    const name = ($("newExerciseInput").value || "").trim();
-    const tag  = $("newExerciseTag").value;
-    if (!name) return;
-    r.days[dIdx].exercises.push({ name, tag });
-    $("newExerciseInput").value = "";
-    saveLocal(state.data);
-    renderRoutines();
-    renderLogDaySelect();
-  });
-
-  $("routineDaySelect").addEventListener("change", renderRoutines);
-  $("routineCompoundOnly").addEventListener("change", renderRoutines);
-
-  // Password change
-  $("setPwBtn").addEventListener("click", () => {
-    const pw = ($("newPw").value || "").trim();
-    if (!pw) return alert("Enter a new password.");
-    setLocalPassword(pw);
-    $("newPw").value = "";
-    alert("Password updated.");
-  });
-
-  // History
-  $("historySearch").addEventListener("input", renderHistory);
-  $("clearAllBtn").addEventListener("click", () => {
-    if (!confirm("This clears ALL local data. Continue?")) return;
-    state.data = defaultData();
-    saveLocal(state.data);
-    state.activeWorkout = null;
-    renderAll();
-  });
-
-  // Reports
-  $("reportCompoundOnly").addEventListener("change", renderReports);
-  $("reportMetric").addEventListener("change", renderReports);
-  $("reportExercise").addEventListener("change", renderReports);
-}
-
-// ---------- Rendering ----------
-function renderAll() {
-  renderLogDaySelect();
-  renderWorkout();
-  renderRoutines();
-  renderHistory();
-  renderReports();
-}
-
+// ====== Log Tab ======
 function renderLogDaySelect() {
-  const r = activeRoutine();
-  const sel = $("daySelect");
+  const r = getActiveRoutine();
+  const sel = $("#daySelect");
   sel.innerHTML = "";
-  r.days.forEach((d, i) => {
+  if (!r || !r.days.length) {
     const opt = document.createElement("option");
-    opt.value = String(i);
+    opt.value = "";
+    opt.textContent = "No days found (create in Routines tab)";
+    sel.appendChild(opt);
+    return;
+  }
+  r.days.forEach((d, idx) => {
+    const opt = document.createElement("option");
+    opt.value = String(idx);
     opt.textContent = d.name;
     sel.appendChild(opt);
   });
 }
 
-function startWorkout() {
-  const r = activeRoutine();
-  const dIdx = parseInt($("daySelect").value || "0", 10);
-  const day = r.days[dIdx];
-  if (!day) return;
+function setupLogActions() {
+  $("#startWorkoutBtn").addEventListener("click", () => {
+    const r = getActiveRoutine();
+    if (!r) return;
 
-  const compoundOnly = $("logCompoundOnly").checked;
-  const exercises = filterByCompoundOnly(day.exercises, compoundOnly);
+    const dayIdx = Number($("#daySelect").value);
+    const day = r.days[dayIdx];
+    if (!day) return;
 
-  state.activeWorkout = {
-    routineId: r.id,
-    routineName: r.name,
-    dayName: day.name,
-    startedAt: Date.now(),
-    exercises: exercises.map(ex => ({
-      name: ex.name,
-      tag: ex.tag,
-      sets: [{ weight: "", reps: "" }]
-    }))
-  };
-  renderWorkout();
+    const compoundOnly = $("#logCompoundOnly").checked;
+
+    const dayExercises = (day.exercises || [])
+      .filter(ex => !compoundOnly || ex.tag === "compound")
+      .map(ex => ({ exercise: ex.name, tag: ex.tag, sets: [] }));
+
+    currentWorkout = {
+      routineId: r.id,
+      routineName: r.name,
+      dayName: day.name + (compoundOnly ? " (Compound)" : ""),
+      date: Date.now(),
+      entries: dayExercises,
+      notes: ""
+    };
+
+    renderWorkoutBuilder();
+  });
+
+  $("#clearWorkoutBtn").addEventListener("click", () => {
+    currentWorkout = null;
+    $("#workoutBuilder").classList.add("hidden");
+  });
+
+  $("#saveWorkoutBtn").addEventListener("click", () => {
+    if (!currentWorkout) return;
+
+    const cleaned = {
+      ...currentWorkout,
+      id: crypto.randomUUID(),
+      entries: currentWorkout.entries
+        .map(e => ({
+          exercise: e.exercise,
+          sets: (e.sets || [])
+            .map(s => ({ weight: clampNum(Number(s.weight)), reps: clampNum(Number(s.reps)) }))
+            .filter(s => s.weight > 0 && s.reps > 0)
+        }))
+        .filter(e => e.sets.length > 0)
+    };
+
+    if (cleaned.entries.length === 0) {
+      alert("Add at least one set (weight + reps) before saving.");
+      return;
+    }
+
+    data.workouts.unshift(cleaned);
+    saveData(data);
+
+    // rebuild stats
+    exerciseStats = buildExerciseStats(data.workouts);
+
+    alert("Workout saved ✅");
+    currentWorkout = null;
+    $("#workoutBuilder").classList.add("hidden");
+  });
 }
 
-function renderWorkout() {
-  const list = $("exerciseLogList");
+function prBadgeForExercise(exName) {
+  const s = exerciseStats.get(exName);
+  if (!s || !s.maxWeight) return `<span class="badge muted">No PR yet</span>`;
+  return `<span class="badge">PR: ${s.maxWeight}×${s.repsAtMaxWeight}</span>`;
+}
+
+function tagBadge(tag) {
+  const t = tag === "compound" ? "Compound" : "Accessory";
+  return `<span class="badge muted">${t}</span>`;
+}
+
+function maxRepsAtWeightHint(exName, weight) {
+  if (!weight || weight <= 0) return "";
+  const s = exerciseStats.get(exName);
+  if (!s) return "";
+  const key = String(weight);
+  const maxReps = s.repsByWeight.get(key);
+  if (!maxReps) return "";
+  return `At ${weight}, your best is <b>${maxReps}</b> reps.`;
+}
+
+function renderWorkoutBuilder() {
+  const wrap = $("#workoutBuilder");
+  const list = $("#exerciseLogList");
+  wrap.classList.remove("hidden");
+
+  $("#workoutTitle").textContent = `${currentWorkout.dayName} Workout`;
+  $("#workoutMeta").textContent = `${currentWorkout.routineName} • ${formatDate(currentWorkout.date)}`;
+
   list.innerHTML = "";
 
-  const w = state.activeWorkout;
-  if (!w) {
-    list.innerHTML = `<div class="muted">No active workout. Click <b>Start workout</b>.</div>`;
+  if (!currentWorkout.entries.length) {
+    list.innerHTML = `<div class="muted">No exercises (check your routine or filters).</div>`;
     return;
   }
 
-  w.exercises.forEach((ex, exIdx) => {
-    const card = document.createElement("div");
-    card.className = "card";
+  currentWorkout.entries.forEach((entry) => {
+    const exName = normalizeName(entry.exercise);
+
+    const block = document.createElement("div");
+    block.className = "exBlock";
+
+    const header = document.createElement("div");
+    header.className = "exHeader";
+
+    const titleWrap = document.createElement("div");
+    titleWrap.className = "exTitleWrap";
 
     const title = document.createElement("div");
-    title.innerHTML = `<h3 style="margin:0 0 6px 0;">${escapeHtml(ex.name)} <span class="muted tiny">(${ex.tag})</span></h3>`;
-    card.appendChild(title);
+    title.className = "exTitle";
+    title.textContent = exName;
 
-    const setsWrap = document.createElement("div");
+    const pr = document.createElement("div");
+    pr.innerHTML = prBadgeForExercise(exName);
 
-    ex.sets.forEach((s, sIdx) => {
-      const row = document.createElement("div");
-      row.className = "row wrap";
+    const tag = document.createElement("div");
+    tag.innerHTML = tagBadge(entry.tag);
 
-      const wIn = document.createElement("input");
-      wIn.placeholder = "Weight";
-      wIn.value = s.weight;
-      wIn.addEventListener("input", () => { s.weight = wIn.value; });
+    titleWrap.appendChild(title);
+    titleWrap.appendChild(pr);
+    titleWrap.appendChild(tag);
 
-      const rIn = document.createElement("input");
-      rIn.placeholder = "Reps";
-      rIn.value = s.reps;
-      rIn.addEventListener("input", () => { s.reps = rIn.value; });
+    const addSetBtn = document.createElement("button");
+    addSetBtn.className = "ghost small";
+    addSetBtn.textContent = "+ Set";
+    addSetBtn.addEventListener("click", () => {
+      entry.sets.push({ weight: "", reps: "" });
+      renderWorkoutBuilder();
+    });
 
-      const del = document.createElement("button");
-      del.className = "btn danger";
-      del.textContent = "Remove set";
-      del.addEventListener("click", () => {
-        ex.sets.splice(sIdx, 1);
-        if (ex.sets.length === 0) ex.sets.push({ weight: "", reps: "" });
-        renderWorkout();
+    header.appendChild(titleWrap);
+    header.appendChild(addSetBtn);
+
+    const setsDiv = document.createElement("div");
+    setsDiv.className = "sets";
+
+    if (entry.sets.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "muted tiny";
+      empty.textContent = "No sets yet. Tap + Set.";
+      setsDiv.appendChild(empty);
+    } else {
+      entry.sets.forEach((s, setIdx) => {
+        const row = document.createElement("div");
+        row.className = "setRow";
+
+        const w = document.createElement("input");
+        w.type = "number";
+        w.inputMode = "decimal";
+        w.placeholder = "Weight";
+        w.value = s.weight;
+
+        const r = document.createElement("input");
+        r.type = "number";
+        r.inputMode = "numeric";
+        r.placeholder = "Reps";
+        r.value = s.reps;
+
+        const del = document.createElement("button");
+        del.className = "danger small";
+        del.textContent = "✕";
+        del.addEventListener("click", () => {
+          entry.sets.splice(setIdx, 1);
+          renderWorkoutBuilder();
+        });
+
+        // hint line (updates as weight changes)
+        const hint = document.createElement("div");
+        hint.className = "hint";
+        const currentWeight = clampNum(Number(w.value));
+        hint.innerHTML = maxRepsAtWeightHint(exName, currentWeight);
+
+        w.addEventListener("input", () => {
+          s.weight = w.value;
+          const wt = clampNum(Number(w.value));
+          hint.innerHTML = maxRepsAtWeightHint(exName, wt);
+        });
+
+        r.addEventListener("input", () => {
+          s.reps = r.value;
+        });
+
+        const setWrap = document.createElement("div");
+        setWrap.style.display = "flex";
+        setWrap.style.flexDirection = "column";
+        setWrap.style.gap = "6px";
+
+        row.appendChild(w);
+        row.appendChild(r);
+        row.appendChild(del);
+
+        setWrap.appendChild(row);
+        setWrap.appendChild(hint);
+
+        setsDiv.appendChild(setWrap);
       });
+    }
 
-      row.appendChild(wIn);
-      row.appendChild(rIn);
-      row.appendChild(del);
-      setsWrap.appendChild(row);
-    });
-
-    const addSet = document.createElement("button");
-    addSet.className = "btn ghost";
-    addSet.textContent = "+ Add set";
-    addSet.addEventListener("click", () => {
-      ex.sets.push({ weight: "", reps: "" });
-      renderWorkout();
-    });
-
-    card.appendChild(setsWrap);
-    card.appendChild(addSet);
-    list.appendChild(card);
+    block.appendChild(header);
+    block.appendChild(setsDiv);
+    list.appendChild(block);
   });
 }
 
-function saveWorkout() {
-  const w = state.activeWorkout;
-  if (!w) return alert("No active workout.");
-
-  // Clean sets
-  const cleaned = JSON.parse(JSON.stringify(w));
-  cleaned.exercises.forEach(ex => {
-    ex.sets = ex.sets
-      .map(s => ({
-        weight: parseFloat(String(s.weight).trim()),
-        reps: parseInt(String(s.reps).trim(), 10)
-      }))
-      .filter(s => Number.isFinite(s.weight) && Number.isFinite(s.reps) && s.reps > 0);
-  });
-  cleaned.exercises = cleaned.exercises.filter(ex => ex.sets.length > 0);
-
-  if (cleaned.exercises.length === 0) return alert("No valid sets to save.");
-
-  cleaned.savedAt = Date.now();
-  state.data.history.unshift(cleaned);
-  saveLocal(state.data);
-
-  state.activeWorkout = null;
-  renderWorkout();
-  renderHistory();
-  renderReports();
-  alert("Workout saved.");
+// ====== Routines Tab ======
+function renderRoutineUI() {
+  renderRoutineSelect();
+  renderRoutineDaySelect();
+  renderExerciseList();
+  renderReplaceFrom();
 }
 
-function renderRoutines() {
-  const rSel = $("routineSelect");
-  const dSel = $("routineDaySelect");
-  const list = $("exerciseList");
-  const compoundOnly = $("routineCompoundOnly").checked;
-
-  // Routine select
-  rSel.innerHTML = "";
-  state.data.routines.forEach(r => {
+function renderRoutineSelect() {
+  const sel = $("#routineSelect");
+  sel.innerHTML = "";
+  data.routines.forEach(r => {
     const opt = document.createElement("option");
     opt.value = r.id;
-    opt.textContent = r.name;
-    if (r.id === state.data.activeRoutineId) opt.selected = true;
-    rSel.appendChild(opt);
+    opt.textContent = r.name + (r.id === data.activeRoutineId ? " (Active)" : "");
+    sel.appendChild(opt);
   });
+  sel.value = data.activeRoutineId;
+}
 
-  const r = activeRoutine();
-  dSel.innerHTML = "";
-  r.days.forEach((d, i) => {
+function getSelectedRoutine() {
+  const id = $("#routineSelect").value;
+  return data.routines.find(r => r.id === id) || getActiveRoutine();
+}
+
+function renderRoutineDaySelect() {
+  const r = getSelectedRoutine();
+  const sel = $("#routineDaySelect");
+  sel.innerHTML = "";
+  if (!r || !r.days.length) {
     const opt = document.createElement("option");
-    opt.value = String(i);
+    opt.value = "";
+    opt.textContent = "No days (add one)";
+    sel.appendChild(opt);
+    return;
+  }
+  r.days.forEach((d, idx) => {
+    const opt = document.createElement("option");
+    opt.value = String(idx);
     opt.textContent = d.name;
-    dSel.appendChild(opt);
+    sel.appendChild(opt);
   });
+}
 
-  const dIdx = dSel.selectedIndex >= 0 ? dSel.selectedIndex : 0;
-  const day = r.days[dIdx];
+function getSelectedDay() {
+  const r = getSelectedRoutine();
+  const idx = Number($("#routineDaySelect").value);
+  return { r, idx, day: r?.days?.[idx] };
+}
 
-  // Exercise list
-  list.innerHTML = "";
+function renderExerciseList() {
+  const { day } = getSelectedDay();
+  const container = $("#exerciseList");
+  container.innerHTML = "";
+
   if (!day) {
-    list.innerHTML = `<div class="muted">No days yet.</div>`;
+    container.innerHTML = `<div class="muted tiny">Select or create a day.</div>`;
     return;
   }
 
-  const exs = filterByCompoundOnly(day.exercises, compoundOnly);
+  const compoundOnly = $("#routineCompoundOnly").checked;
+  const exercises = (day.exercises || []).filter(ex => !compoundOnly || ex.tag === "compound");
 
-  exs.forEach((ex, i) => {
-    const row = document.createElement("div");
-    row.className = "row wrap";
+  exercises.forEach((ex, i) => {
+    const item = document.createElement("div");
+    item.className = "item";
 
+    const left = document.createElement("div");
+    left.className = "left";
     const name = document.createElement("div");
-    name.className = "chip";
-    name.textContent = `${ex.name} (${ex.tag})`;
+    name.className = "name";
+    name.textContent = ex.name;
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.innerHTML = `${ex.tag === "compound" ? "Compound" : "Accessory"} • ${prBadgeForExercise(ex.name)}`;
+    left.appendChild(name);
+    left.appendChild(meta);
 
-    const del = document.createElement("button");
-    del.className = "btn danger";
-    del.textContent = "Delete";
-    del.addEventListener("click", () => {
-      const realIdx = day.exercises.findIndex(e => e.name === ex.name && e.tag === ex.tag);
-      if (realIdx < 0) return;
-      if (!confirm(`Delete exercise "${ex.name}"?`)) return;
-      day.exercises.splice(realIdx, 1);
-      saveLocal(state.data);
-      renderRoutines();
-      renderLogDaySelect();
+    const actions = document.createElement("div");
+    actions.className = "actions";
+
+    const tagToggle = document.createElement("button");
+    tagToggle.className = "ghost small";
+    tagToggle.textContent = ex.tag === "compound" ? "→ Accessory" : "→ Compound";
+    tagToggle.addEventListener("click", () => {
+      ex.tag = ex.tag === "compound" ? "accessory" : "compound";
+      saveData(data);
+      renderExerciseList();
+      renderReplaceFrom();
+      renderReports(); // keep tags consistent
     });
 
-    row.appendChild(name);
-    row.appendChild(del);
-    list.appendChild(row);
-  });
-}
+    const up = document.createElement("button");
+    up.className = "ghost small";
+    up.textContent = "↑";
+    up.disabled = i === 0;
+    up.addEventListener("click", () => {
+      // Need original index in day.exercises (not filtered index)
+      const origIdx = day.exercises.findIndex(e => e.name === ex.name && e.tag === ex.tag);
+      if (origIdx > 0) {
+        day.exercises.splice(origIdx - 1, 0, day.exercises.splice(origIdx, 1)[0]);
+        saveData(data);
+        renderExerciseList();
+        renderReplaceFrom();
+      }
+    });
 
-function newRoutine() {
-  const name = prompt("New routine name?", "Routine");
-  if (!name) return;
-  const r = {
-    id: crypto.randomUUID(),
-    name,
-    createdAt: Date.now(),
-    days: [{ name: "Day 1", exercises: [] }]
-  };
-  state.data.routines.unshift(r);
-  state.data.activeRoutineId = r.id;
-  saveLocal(state.data);
-  refreshLabels();
-  renderAll();
-}
-
-function cloneRoutine() {
-  const r = activeRoutine();
-  const copy = JSON.parse(JSON.stringify(r));
-  copy.id = crypto.randomUUID();
-  copy.name = `${r.name} (copy)`;
-  copy.createdAt = Date.now();
-  state.data.routines.unshift(copy);
-  state.data.activeRoutineId = copy.id;
-  saveLocal(state.data);
-  refreshLabels();
-  renderAll();
-}
-
-function renameRoutine() {
-  const r = activeRoutine();
-  const name = prompt("Rename routine:", r.name);
-  if (!name) return;
-  r.name = name;
-  saveLocal(state.data);
-  refreshLabels();
-  renderAll();
-}
-
-function deleteRoutine() {
-  if (state.data.routines.length <= 1) return alert("Keep at least one routine.");
-  const r = activeRoutine();
-  if (!confirm(`Delete routine "${r.name}"?`)) return;
-  state.data.routines = state.data.routines.filter(x => x.id !== r.id);
-  state.data.activeRoutineId = state.data.routines[0].id;
-  saveLocal(state.data);
-  refreshLabels();
-  renderAll();
-}
-
-function renderHistory() {
-  const q = ($("historySearch").value || "").trim().toLowerCase();
-  const list = $("historyList");
-  list.innerHTML = "";
-
-  const items = state.data.history.filter(w => {
-    if (!q) return true;
-    return w.exercises.some(ex => ex.name.toLowerCase().includes(q));
-  });
-
-  if (items.length === 0) {
-    list.innerHTML = `<div class="muted">No history yet.</div>`;
-    return;
-  }
-
-  items.forEach((w, idx) => {
-    const card = document.createElement("div");
-    card.className = "card";
-
-    const dt = new Date(w.savedAt || w.startedAt || Date.now());
-    const head = document.createElement("div");
-    head.innerHTML = `<h3 style="margin:0 0 6px 0;">${escapeHtml(w.routineName || "")} — ${escapeHtml(w.dayName || "")}
-      <span class="muted tiny">(${dt.toLocaleString()})</span></h3>`;
-
-    const body = document.createElement("div");
-    body.className = "muted";
-    body.innerHTML = w.exercises.map(ex => {
-      const sets = ex.sets.map(s => `${s.weight}×${s.reps}`).join(", ");
-      return `<div><b>${escapeHtml(ex.name)}:</b> ${escapeHtml(sets)}</div>`;
-    }).join("");
+    const down = document.createElement("button");
+    down.className = "ghost small";
+    down.textContent = "↓";
+    down.addEventListener("click", () => {
+      const origIdx = day.exercises.findIndex(e => e.name === ex.name && e.tag === ex.tag);
+      if (origIdx >= 0 && origIdx < day.exercises.length - 1) {
+        day.exercises.splice(origIdx + 1, 0, day.exercises.splice(origIdx, 1)[0]);
+        saveData(data);
+        renderExerciseList();
+        renderReplaceFrom();
+      }
+    });
 
     const del = document.createElement("button");
-    del.className = "btn danger";
+    del.className = "danger small";
     del.textContent = "Delete";
     del.addEventListener("click", () => {
-      if (!confirm("Delete this workout?")) return;
-      const realIdx = state.data.history.findIndex(x => x.savedAt === w.savedAt && x.startedAt === w.startedAt);
-      if (realIdx >= 0) state.data.history.splice(realIdx, 1);
-      saveLocal(state.data);
-      renderHistory();
+      if (!confirm(`Delete "${ex.name}" from this day?`)) return;
+      const idx = day.exercises.indexOf(ex);
+      if (idx >= 0) day.exercises.splice(idx, 1);
+      saveData(data);
+      renderExerciseList();
+      renderReplaceFrom();
       renderReports();
     });
 
-    card.appendChild(head);
-    card.appendChild(body);
-    card.appendChild(del);
-    list.appendChild(card);
+    actions.appendChild(tagToggle);
+    actions.appendChild(up);
+    actions.appendChild(down);
+    actions.appendChild(del);
+
+    item.appendChild(left);
+    item.appendChild(actions);
+    container.appendChild(item);
+  });
+
+  if (exercises.length === 0) {
+    container.innerHTML = `<div class="muted tiny">No exercises match this filter. Add one above.</div>`;
+  }
+}
+
+function renderReplaceFrom() {
+  const { day } = getSelectedDay();
+  const sel = $("#replaceFrom");
+  sel.innerHTML = "";
+  if (!day || !(day.exercises || []).length) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No exercises";
+    sel.appendChild(opt);
+    return;
+  }
+  day.exercises.forEach(ex => {
+    const opt = document.createElement("option");
+    opt.value = ex.name;
+    opt.textContent = `${ex.name} (${ex.tag})`;
+    sel.appendChild(opt);
   });
 }
 
-function renderReports() {
-  const exSel = $("reportExercise");
-  const metric = $("reportMetric").value;
-  const compoundOnly = $("reportCompoundOnly").checked;
-
-  // Populate exercise dropdown from history
-  const allEx = uniqueExercisesFromHistory();
-  const exFromRoutines = (() => {
-    const set = new Set();
-    for (const r of state.data.routines) {
-      for (const d of r.days) for (const ex of d.exercises) set.add(ex.name);
-    }
-    return Array.from(set).sort((a,b)=>a.localeCompare(b));
-  })();
-
-  const merged = Array.from(new Set([...allEx, ...exFromRoutines])).sort((a,b)=>a.localeCompare(b));
-  const prev = exSel.value;
-
-  exSel.innerHTML = "";
-  merged.forEach(name => {
-    // compound filter uses routine tags if available
-    if (compoundOnly) {
-      const isCompound = state.data.routines.some(r =>
-        r.days.some(d => d.exercises.some(e => e.name === name && e.tag === "compound"))
-      );
-      if (!isCompound) return;
-    }
-    const opt = document.createElement("option");
-    opt.value = name;
-    opt.textContent = name;
-    exSel.appendChild(opt);
+function setupRoutineActions() {
+  $("#routineSelect").addEventListener("change", () => {
+    renderRoutineDaySelect();
+    renderExerciseList();
+    renderReplaceFrom();
   });
 
-  if (prev && Array.from(exSel.options).some(o => o.value === prev)) exSel.value = prev;
+  $("#routineDaySelect").addEventListener("change", () => {
+    renderExerciseList();
+    renderReplaceFrom();
+  });
 
-  const chosen = exSel.value;
-  const rows = [];
+  $("#routineCompoundOnly").addEventListener("change", () => {
+    renderExerciseList();
+  });
 
-  if (chosen) {
-    for (const w of state.data.history) {
-      const ex = w.exercises.find(e => e.name === chosen);
-      if (!ex) continue;
+  $("#setActiveBtn").addEventListener("click", () => {
+    const id = $("#routineSelect").value;
+    setActiveRoutine(id);
+    renderRoutineSelect();
+    renderLogDaySelect();
+    renderReports();
+  });
 
-      // pick best set for chart / metric
-      const sets = ex.sets || [];
-      if (sets.length === 0) continue;
+  $("#newRoutineBtn").addEventListener("click", () => {
+    const name = prompt("Routine name?", "New Routine");
+    if (!name) return;
+    const r = {
+      id: crypto.randomUUID(),
+      name: name.trim(),
+      createdAt: Date.now(),
+      days: [{ name: "Day 1", exercises: [] }]
+    };
+    data.routines.unshift(r);
+    data.activeRoutineId = r.id;
+    saveData(data);
+    renderActiveRoutineLabel();
+    renderRoutineUI();
+    renderLogDaySelect();
+    renderReports();
+  });
 
-      const best = sets.reduce((a,b) => {
-        const aE = est1rm(a.weight, a.reps);
-        const bE = est1rm(b.weight, b.reps);
-        return bE > aE ? b : a;
-      });
+  $("#cloneRoutineBtn").addEventListener("click", () => {
+    const r = getActiveRoutine();
+    if (!r) return;
+    const name = prompt("Name for cloned routine?", `${r.name} (copy)`);
+    if (!name) return;
+    const clone = structuredClone(r);
+    clone.id = crypto.randomUUID();
+    clone.name = name.trim();
+    clone.createdAt = Date.now();
 
-      const topWeight = Math.max(...sets.map(s => s.weight));
-      const volume = sets.reduce((sum, s) => sum + (s.weight * s.reps), 0);
-      const e1rm = est1rm(best.weight, best.reps);
+    data.routines.unshift(clone);
+    data.activeRoutineId = clone.id;
+    saveData(data);
 
-      const dt = new Date(w.savedAt || w.startedAt || Date.now());
-      rows.push({
-        date: dt,
-        topWeight,
-        volume,
-        e1rm
+    renderActiveRoutineLabel();
+    renderRoutineUI();
+    renderLogDaySelect();
+    renderReports();
+  });
+
+  $("#renameRoutineBtn").addEventListener("click", () => {
+    const r = getActiveRoutine();
+    if (!r) return;
+    const name = prompt("New name?", r.name);
+    if (!name) return;
+    r.name = name.trim();
+    saveData(data);
+    renderActiveRoutineLabel();
+    renderRoutineUI();
+    renderLogDaySelect();
+    renderReports();
+  });
+
+  $("#deleteRoutineBtn").addEventListener("click", () => {
+    if (data.routines.length <= 1) {
+      alert("You must have at least one routine.");
+      return;
+    }
+    const r = getActiveRoutine();
+    if (!r) return;
+    if (!confirm(`Delete routine "${r.name}"? (Workouts remain in history.)`)) return;
+
+    data.routines = data.routines.filter(x => x.id !== r.id);
+    data.activeRoutineId = data.routines[0].id;
+    saveData(data);
+
+    renderActiveRoutineLabel();
+    renderRoutineUI();
+    renderLogDaySelect();
+    renderReports();
+  });
+
+  $("#addDayBtn").addEventListener("click", () => {
+    const r = getSelectedRoutine();
+    if (!r) return;
+    const name = prompt("Day name?", `Day ${r.days.length + 1}`);
+    if (!name) return;
+    r.days.push({ name: name.trim(), exercises: [] });
+    saveData(data);
+    renderRoutineDaySelect();
+    renderExerciseList();
+    renderReplaceFrom();
+  });
+
+  $("#deleteDayBtn").addEventListener("click", () => {
+    const { r, idx, day } = getSelectedDay();
+    if (!r || !day) return;
+    if (r.days.length <= 1) {
+      alert("A routine must have at least one day.");
+      return;
+    }
+    if (!confirm(`Delete day "${day.name}"?`)) return;
+    r.days.splice(idx, 1);
+    saveData(data);
+    renderRoutineDaySelect();
+    renderExerciseList();
+    renderReplaceFrom();
+  });
+
+  $("#addExerciseBtn").addEventListener("click", () => {
+    const { day } = getSelectedDay();
+    if (!day) return;
+    const v = ($("#newExerciseInput").value || "").trim();
+    if (!v) return;
+    const tag = $("#newExerciseTag").value === "accessory" ? "accessory" : "compound";
+    day.exercises.push({ name: v, tag });
+    $("#newExerciseInput").value = "";
+    saveData(data);
+    renderExerciseList();
+    renderReplaceFrom();
+    renderReports();
+  });
+
+  $("#newExerciseInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") $("#addExerciseBtn").click();
+  });
+
+  $("#replaceBtn").addEventListener("click", () => {
+    const { day } = getSelectedDay();
+    if (!day) return;
+    const fromName = $("#replaceFrom").value;
+    const to = ($("#replaceTo").value || "").trim();
+    const tag = $("#replaceToTag").value === "accessory" ? "accessory" : "compound";
+    if (!fromName || !to) return;
+
+    const idx = (day.exercises || []).findIndex(x => x.name === fromName);
+    if (idx === -1) return;
+
+    day.exercises[idx] = { name: to, tag };
+    $("#replaceTo").value = "";
+    saveData(data);
+    renderExerciseList();
+    renderReplaceFrom();
+    renderReports();
+  });
+
+  $("#setPwBtn").addEventListener("click", () => {
+    const pw = ($("#newPw").value || "").trim();
+    if (!pw) return;
+    setPassword(pw);
+    $("#newPw").value = "";
+    alert("Password updated (local).");
+  });
+}
+
+// ====== History Tab ======
+function renderHistory() {
+  const wrap = $("#historyList");
+  wrap.innerHTML = "";
+
+  if (!data.workouts.length) {
+    wrap.innerHTML = `<div class="muted">No workouts saved yet.</div>`;
+    return;
+  }
+
+  data.workouts.forEach(w => {
+    const card = document.createElement("div");
+    card.className = "historyCard";
+
+    const top = document.createElement("div");
+    top.className = "historyTop";
+
+    const left = document.createElement("div");
+    left.innerHTML = `
+      <div class="historyTitle">${w.dayName}</div>
+      <div class="muted tiny">${w.routineName} • ${formatDate(w.date)}</div>
+    `;
+
+    const right = document.createElement("div");
+    const del = document.createElement("button");
+    del.className = "danger small";
+    del.textContent = "Delete";
+    del.addEventListener("click", () => {
+      if (!confirm("Delete this workout?")) return;
+      data.workouts = data.workouts.filter(x => x.id !== w.id);
+      saveData(data);
+      exerciseStats = buildExerciseStats(data.workouts);
+      renderHistory();
+      renderReports();
+    });
+    right.appendChild(del);
+
+    top.appendChild(left);
+    top.appendChild(right);
+
+    const details = document.createElement("div");
+    details.className = "muted tiny";
+    details.style.marginTop = "10px";
+
+    const lines = [];
+    (w.entries || []).forEach(e => {
+      const sets = (e.sets || []).map(s => `${s.weight}x${s.reps}`).join(", ");
+      lines.push(`<div><b>${e.exercise}</b>: ${sets}</div>`);
+    });
+
+    details.innerHTML = lines.join("");
+
+    card.appendChild(top);
+    card.appendChild(details);
+    wrap.appendChild(card);
+  });
+}
+
+function toCsv() {
+  // Workout-level, set-level rows
+  const header = [
+    "workout_id","workout_date","routine_name","day_name",
+    "exercise","set_index","weight","reps"
+  ];
+  const rows = [header.join(",")];
+
+  for (const w of data.workouts) {
+    const dateIso = new Date(w.date).toISOString();
+    for (const entry of (w.entries || [])) {
+      (entry.sets || []).forEach((s, idx) => {
+        const r = [
+          w.id,
+          dateIso,
+          csvSafe(w.routineName),
+          csvSafe(w.dayName),
+          csvSafe(entry.exercise),
+          idx + 1,
+          s.weight,
+          s.reps
+        ];
+        rows.push(r.join(","));
       });
     }
   }
+  return rows.join("\n");
+}
+function csvSafe(v) {
+  const s = String(v ?? "");
+  if (/[,"\n]/.test(s)) return `"${s.replaceAll('"','""')}"`;
+  return s;
+}
 
-  rows.sort((a,b)=>a.date - b.date);
+function setupHistoryActions() {
+  $("#exportJsonBtn").addEventListener("click", () => {
+    downloadFile("lifting-tracker-export.json", JSON.stringify(data, null, 2), "application/json");
+  });
 
-  // Summary + table
-  const summaryEl = $("reportSummary");
-  const tableEl = $("reportTable");
+  $("#exportCsvBtn").addEventListener("click", () => {
+    downloadFile("lifting-tracker-export.csv", toCsv(), "text/csv");
+  });
 
-  if (!chosen || rows.length === 0) {
-    summaryEl.textContent = "No data yet. Save a few workouts to see trends.";
-    tableEl.innerHTML = "";
+  $("#clearAllBtn").addEventListener("click", () => {
+    if (!confirm("This will delete ALL routines and workout history on this browser. Continue?")) return;
+    localStorage.removeItem(KEY.data);
+    localStorage.removeItem(KEY.legacy);
+    data = loadData();
+    currentWorkout = null;
+    exerciseStats = buildExerciseStats(data.workouts);
+    saveData(data);
+    alert("Cleared.");
+    bootRender();
+  });
+}
+
+// ====== Reports Tab ======
+function getAllExercisesWithTags() {
+  // Prefer routine tags (source of truth)
+  const all = [];
+  for (const r of data.routines) {
+    for (const d of (r.days || [])) {
+      for (const ex of (d.exercises || [])) {
+        all.push({ name: ex.name, tag: ex.tag });
+      }
+    }
+  }
+  // Include exercises that only exist in history (tag unknown => accessory)
+  for (const exName of exerciseStats.keys()) {
+    if (!all.some(x => x.name === exName)) all.push({ name: exName, tag: "accessory" });
+  }
+  // unique by name (keep first tag found)
+  const seen = new Set();
+  const uniq = [];
+  for (const x of all) {
+    if (seen.has(x.name)) continue;
+    seen.add(x.name);
+    uniq.push(x);
+  }
+  uniq.sort((a,b)=>a.name.localeCompare(b.name));
+  return uniq;
+}
+
+function buildReportSeries(exerciseName, metric) {
+  // One point per workout: use best set for that exercise (by e1rm)
+  const points = [];
+  for (const w of data.workouts.slice().reverse()) {
+    let best = null;
+    let volume = 0;
+
+    for (const entry of (w.entries || [])) {
+      if (entry.exercise !== exerciseName) continue;
+
+      for (const set of (entry.sets || [])) {
+        const weight = clampNum(Number(set.weight));
+        const reps = clampNum(Number(set.reps));
+        if (weight <= 0 || reps <= 0) continue;
+
+        volume += weight * reps;
+
+        const one = est1RM(weight, reps);
+        if (!best || one > best.oneRM) best = { weight, reps, oneRM: one };
+      }
+    }
+
+    if (!best && metric !== "volume") continue;
+
+    let y = 0;
+    if (metric === "e1rm") y = best.oneRM;
+    if (metric === "topWeight") y = best.weight;
+    if (metric === "volume") y = volume;
+
+    // include volume even if zero? skip empty workouts
+    if (metric === "volume" && y === 0) continue;
+
+    points.push({ x: w.date, y, workout: w, best });
+  }
+  return points;
+}
+
+function renderReports() {
+  // populate exercise dropdown based on search + tag filter
+  const all = getAllExercisesWithTags();
+  const q = ($("#reportSearch")?.value || "").trim().toLowerCase();
+  const compoundOnly = $("#reportCompoundOnly").checked;
+
+  const filtered = all.filter(x => {
+    if (compoundOnly && x.tag !== "compound") return false;
+    if (q && !x.name.toLowerCase().includes(q)) return false;
+    return true;
+  });
+
+  const sel = $("#reportExercise");
+  sel.innerHTML = "";
+
+  if (!filtered.length) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No matches";
+    sel.appendChild(opt);
+    $("#reportSummary").textContent = "";
+    $("#reportTable").innerHTML = "";
     destroyChart();
     return;
   }
 
-  const latest = rows[rows.length - 1];
-  const best = rows.reduce((m, r) => Math.max(m, r[metric]), -Infinity);
+  filtered.forEach(x => {
+    const opt = document.createElement("option");
+    opt.value = x.name;
+    opt.textContent = `${x.name}${x.tag === "compound" ? " (compound)" : ""}`;
+    sel.appendChild(opt);
+  });
 
-  summaryEl.textContent = `Exercise: ${chosen} • Workouts: ${rows.length} • Best ${metricLabel(metric)}: ${round(best)}`;
+  // keep prior selection if possible
+  const prev = sel.dataset.prev;
+  if (prev && filtered.some(x => x.name === prev)) sel.value = prev;
+  sel.dataset.prev = sel.value;
 
-  tableEl.innerHTML = rows.slice().reverse().slice(0, 15).map(r => {
-    return `<div class="row wrap">
-      <div class="chip">${r.date.toLocaleDateString()}</div>
-      <div class="chip">${metricLabel(metric)}: <b>${round(r[metric])}</b></div>
-    </div>`;
-  }).join("");
+  renderSelectedReport();
+}
+
+function destroyChart() {
+  if (reportChart) {
+    reportChart.destroy();
+    reportChart = null;
+  }
+}
+
+function renderSelectedReport() {
+  const exerciseName = $("#reportExercise").value;
+  const metric = $("#reportMetric").value;
+
+  if (!exerciseName) {
+    $("#reportSummary").textContent = "";
+    $("#reportTable").innerHTML = "";
+    destroyChart();
+    return;
+  }
+
+  const series = buildReportSeries(exerciseName, metric);
+
+  // Summary
+  const s = exerciseStats.get(exerciseName);
+  const prText = (s && s.maxWeight) ? `${s.maxWeight}×${s.repsAtMaxWeight}` : "—";
+  const bestE = (s && s.bestSet) ? `${s.bestSet.weight}×${s.bestSet.reps} (e1RM ${s.bestSet.oneRM.toFixed(1)})` : "—";
+
+  $("#reportSummary").innerHTML = `
+    <div><b>PR (max weight):</b> ${prText}</div>
+    <div><b>Best estimated 1RM set:</b> ${bestE}</div>
+    <div class="tiny muted">Points shown: ${series.length}</div>
+  `;
+
+  // Table (recent points)
+  const table = $("#reportTable");
+  table.innerHTML = "";
+  const recent = series.slice().reverse().slice(0, 12);
+
+  recent.forEach(p => {
+    const item = document.createElement("div");
+    item.className = "item";
+
+    let line = "";
+    if (metric === "e1rm") line = `e1RM ${p.y.toFixed(1)} (best ${p.best.weight}×${p.best.reps})`;
+    if (metric === "topWeight") line = `Top weight ${p.y} (best ${p.best.weight}×${p.best.reps})`;
+    if (metric === "volume") line = `Volume ${Math.round(p.y)}`;
+
+    item.innerHTML = `
+      <div class="left">
+        <div class="name">${line}</div>
+        <div class="meta">${formatDate(p.x)} • ${p.workout.routineName} • ${p.workout.dayName}</div>
+      </div>
+    `;
+    table.appendChild(item);
+  });
 
   // Chart
-  const ctx = $("reportChart");
+  renderChart(exerciseName, metric, series);
+}
+
+function renderChart(exerciseName, metric, series) {
+  const ctx = $("#reportChart").getContext("2d");
   destroyChart();
-  state.chart = new Chart(ctx, {
+
+  const label = metric === "e1rm" ? "Estimated 1RM" : metric === "topWeight" ? "Top Weight" : "Volume";
+  const dataPoints = series.map(p => ({ x: new Date(p.x), y: p.y }));
+
+  reportChart = new Chart(ctx, {
     type: "line",
     data: {
-      labels: rows.map(r => r.date.toLocaleDateString()),
       datasets: [{
-        label: `${chosen} — ${metricLabel(metric)}`,
-        data: rows.map(r => r[metric])
+        label: `${exerciseName} • ${label}`,
+        data: dataPoints,
+        tension: 0.25,
+        pointRadius: 3
       }]
     },
     options: {
       responsive: true,
-      maintainAspectRatio: false
+      maintainAspectRatio: false,
+      parsing: false,
+      scales: {
+        x: { type: "time", time: { unit: "week" } },
+        y: { beginAtZero: false }
+      },
+      plugins: {
+        legend: { display: true },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${label}: ${metric === "e1rm" ? ctx.parsed.y.toFixed(1) : Math.round(ctx.parsed.y)}`
+          }
+        }
+      }
     }
   });
 }
 
-function destroyChart() {
-  if (state.chart) {
-    try { state.chart.destroy(); } catch {}
-    state.chart = null;
+function setupReportsActions() {
+  $("#reportSearch").addEventListener("input", () => renderReports());
+  $("#reportCompoundOnly").addEventListener("change", () => renderReports());
+  $("#reportMetric").addEventListener("change", () => renderSelectedReport());
+  $("#reportExercise").addEventListener("change", (e) => {
+    e.target.dataset.prev = e.target.value;
+    renderSelectedReport();
+  });
+}
+
+// ====== Boot Render ======
+function bootRender() {
+  data = loadData();
+  exerciseStats = buildExerciseStats(data.workouts);
+
+  renderActiveRoutineLabel();
+  renderLogDaySelect();
+  renderRoutineUI();
+  renderHistory();
+  renderReports();
+}
+
+// ====== Init ======
+function setupMainWiring() {
+  setupLogActions();
+  setupRoutineActions();
+  setupHistoryActions();
+  setupReportsActions();
+
+  // When toggling in log tab, don't rerender workout; it only affects start
+  $("#logCompoundOnly").addEventListener("change", () => {});
+}
+
+function init() {
+  setupTabs();
+  setupLogin();
+  setupMainWiring();
+
+  if (isUnlocked()) {
+    $("#loginView").classList.add("hidden");
+    $("#mainView").classList.remove("hidden");
+    bootRender();
   }
 }
 
-// ---------- Export helpers ----------
-function exportJson(obj) {
-  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "lifting-tracker.json";
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-function exportCsv() {
-  // basic: workout rows per set
-  const lines = ["date,routine,day,exercise,weight,reps"];
-  for (const w of state.data.history) {
-    const dt = new Date(w.savedAt || w.startedAt || Date.now()).toISOString();
-    for (const ex of w.exercises) {
-      for (const s of ex.sets) {
-        lines.push([
-          dt,
-          csv(w.routineName || ""),
-          csv(w.dayName || ""),
-          csv(ex.name),
-          s.weight,
-          s.reps
-        ].join(","));
-      }
-    }
-  }
-  const blob = new Blob([lines.join("\n")], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "lifting-tracker.csv";
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-function csv(s) {
-  const t = String(s).replaceAll('"', '""');
-  return `"${t}"`;
-}
-
-// ---------- Math ----------
-function est1rm(weight, reps) {
-  const w = Number(weight);
-  const r = Number(reps);
-  if (!Number.isFinite(w) || !Number.isFinite(r) || r <= 0) return 0;
-  // Epley
-  return w * (1 + r / 30);
-}
-
-function round(n) {
-  if (!Number.isFinite(n)) return "";
-  return Math.round(n * 100) / 100;
-}
-
-function metricLabel(m) {
-  if (m === "e1rm") return "Est 1RM";
-  if (m === "topWeight") return "Top weight";
-  if (m === "volume") return "Volume";
-  return m;
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({
-    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
-  }[c]));
-}
-
-// ---------- Boot ----------
-function boot() {
-  // Hide main until unlocked
-  cls($("mainView"), "hidden", true);
-  cls($("loginView"), "hidden", false);
-
-  initLock();
-  initFirebaseUI();
-  refreshLabels();
-}
-
-boot();
+init();
