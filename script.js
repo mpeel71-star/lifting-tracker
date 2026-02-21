@@ -1,11 +1,12 @@
-// ================= Firebase (Auth + Firestore) =================
+// ================= FIREBASE (CDN Modular SDK) =================
+
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
 import {
   getAuth,
-  onAuthStateChanged,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
-  signOut
+  signOut,
+  onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-auth.js";
 import {
   getFirestore,
@@ -14,141 +15,87 @@ import {
   setDoc
 } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js";
 
-// 🔐 Your Firebase config
+// 🔥 YOUR REAL FIREBASE CONFIG
 const firebaseConfig = {
-  apiKey: "AIzaSyDwL1Qo-aqD-3Dy2EGafZMF2VWEB0rkQao",
+  apiKey: "AIzaSyDwLIqo-aqD-D3yzEGafZMF2VWEB0rkQao",
   authDomain: "lifting-tracker-5ff1b.firebaseapp.com",
   projectId: "lifting-tracker-5ff1b",
   storageBucket: "lifting-tracker-5ff1b.firebasestorage.app",
   messagingSenderId: "880909478435",
-  appId: "1:880909478435:web:43cd4c5b24a136b4f5df96"
+  appId: "1:880909478435:web:43cd4c5b24a136b4f5df96",
+  measurementId: "G-8PMT4LHEXT"
 };
 
+// Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// ================= Local Data =================
-const LS_KEY = "lt_data_v4";
+// ================= BASIC CLOUD FUNCTIONS =================
 
-function defaultData() {
-  return {
-    routines: [],
-    workouts: []
-  };
+async function saveToCloud(uid, data) {
+  const ref = doc(db, "users", uid);
+  await setDoc(ref, { data, updated: Date.now() });
 }
 
-function loadLocal() {
-  const raw = localStorage.getItem(LS_KEY);
-  if (!raw) {
-    const d = defaultData();
-    saveLocal(d);
-    return d;
+async function loadFromCloud(uid) {
+  const ref = doc(db, "users", uid);
+  const snap = await getDoc(ref);
+  return snap.exists() ? snap.data().data : null;
+}
+
+// ================= AUTH BUTTON LOGIC =================
+
+const emailInput = document.querySelector("input[placeholder='Email']");
+const passwordInput = document.querySelector("input[placeholder='Password']");
+const createBtn = document.querySelector("button:nth-of-type(1)");
+const signInBtn = document.querySelector("button:nth-of-type(2)");
+
+createBtn.addEventListener("click", async () => {
+  const email = emailInput.value.trim();
+  const password = passwordInput.value.trim();
+
+  if (!email || !password) {
+    alert("Email and password required.");
+    return;
   }
-  return JSON.parse(raw);
-}
 
-function saveLocal(d) {
-  localStorage.setItem(LS_KEY, JSON.stringify(d));
-}
-
-let data = loadLocal();
-
-// ================= Cloud Functions =================
-async function cloudSave(uid) {
-  await setDoc(doc(db, "users", uid), {
-    data,
-    updatedAt: Date.now()
-  });
-}
-
-async function cloudLoad(uid) {
-  const snap = await getDoc(doc(db, "users", uid));
-  if (!snap.exists()) return null;
-  return snap.data().data;
-}
-
-// ================= DOM =================
-const $ = id => document.getElementById(id);
-
-const emailEl = $("fbEmail");
-const passEl = $("fbPassword");
-const signUpBtn = $("fbSignUp");
-const signInBtn = $("fbSignIn");
-const signOutBtn = $("fbSignOut");
-const syncBtn = $("fbSyncNow");
-const msgEl = $("fbMsg");
-const statusEl = $("fbStatus");
-const cloudLabel = $("cloudLabel");
-
-// ================= Auth =================
-function showError(text) {
-  msgEl.textContent = text;
-  statusEl.textContent = "";
-}
-
-function showStatus(text) {
-  statusEl.textContent = text;
-  msgEl.textContent = "";
-}
-
-signUpBtn.addEventListener("click", async () => {
-  showError("");
   try {
-    const email = emailEl.value.trim();
-    const pass = passEl.value.trim();
-    if (!email || !pass) return showError("Email and password required.");
-    await createUserWithEmailAndPassword(auth, email, pass);
-  } catch (e) {
-    showError(e.message);
+    await createUserWithEmailAndPassword(auth, email, password);
+    alert("Account created successfully.");
+  } catch (err) {
+    alert("Firebase Error: " + err.message);
   }
 });
 
 signInBtn.addEventListener("click", async () => {
-  showError("");
-  try {
-    const email = emailEl.value.trim();
-    const pass = passEl.value.trim();
-    if (!email || !pass) return showError("Email and password required.");
-    await signInWithEmailAndPassword(auth, email, pass);
-  } catch (e) {
-    showError(e.message);
-  }
-});
+  const email = emailInput.value.trim();
+  const password = passwordInput.value.trim();
 
-signOutBtn.addEventListener("click", async () => {
-  await signOut(auth);
-});
-
-syncBtn.addEventListener("click", async () => {
-  const user = auth.currentUser;
-  if (!user) return showError("Not signed in.");
-  await cloudSave(user.uid);
-  showStatus("Synced to cloud ✅");
-});
-
-// ================= Auth State Listener =================
-onAuthStateChanged(auth, async user => {
-  if (!user) {
-    cloudLabel.textContent = "Local mode";
-    signOutBtn.style.display = "none";
-    syncBtn.style.display = "none";
+  if (!email || !password) {
+    alert("Email and password required.");
     return;
   }
 
-  cloudLabel.textContent = "Cloud connected";
-  signOutBtn.style.display = "inline-block";
-  syncBtn.style.display = "inline-block";
+  try {
+    await signInWithEmailAndPassword(auth, email, password);
+    alert("Signed in successfully.");
+  } catch (err) {
+    alert("Firebase Error: " + err.message);
+  }
+});
 
-  showStatus("Loading cloud...");
-  const cloudData = await cloudLoad(user.uid);
+// Detect login state
+onAuthStateChanged(auth, async (user) => {
+  if (user) {
+    console.log("Logged in as:", user.email);
 
-  if (cloudData) {
-    data = cloudData;
-    saveLocal(data);
-    showStatus("Cloud data loaded ✅");
+    const cloudData = await loadFromCloud(user.uid);
+    if (cloudData) {
+      localStorage.setItem("lifting_data", JSON.stringify(cloudData));
+      console.log("Cloud data loaded.");
+    }
   } else {
-    await cloudSave(user.uid);
-    showStatus("Cloud initialized from this device ✅");
+    console.log("User logged out.");
   }
 });
